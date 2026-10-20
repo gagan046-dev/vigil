@@ -1,0 +1,10 @@
+fastapi==0.142.2
+uvicorn[standard]==0.54.0
+httpx==0.28.1
+redis==8.1.0
+psycopg[binary]==3.3.6
+psycopg-pool==3.3.3
+pydantic==2.13.5
+kubernetes==36.0.3
+beautifulsoup4==4.15.0
+prometheus-client==0.26.0

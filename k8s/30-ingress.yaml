@@ -1,0 +1,34 @@
+# 30 - Ingress: how traffic from your browser gets in.
+#
+#   browser -> 127.0.0.1:8081 -> k3d load balancer -> Traefik (k3s' built-in
+#   ingress controller, namespace kube-system) -> Service -> pod
+#
+# Traefik picks the backend by the Host header. Any "*.localhost" name resolves
+# to 127.0.0.1 on Windows/browsers, so no hosts-file edits are needed.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: vigil
+  namespace: vigil
+  labels: {app.kubernetes.io/name: vigil, app.kubernetes.io/part-of: vigil}
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: vigil.localhost                     # the Vigil UI (and /api via the frontend's nginx)
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: vigil-frontend
+                port: {number: 8080}
+    - host: demo.localhost                      # the demo shop (dev only)
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: vigil-demo-shop
+                port: {number: 8000}

@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Vigil keeps watch on web pages and tells you only when your condition is met.">
+  <title>Vigil — officer of the watch</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#watches">Skip to watches</a>
+
+  <header class="masthead">
+    <div class="masthead__title">
+      <h1><span class="wordmark">Vigil</span> <span class="dash">—</span> <span class="subtitle">officer of the watch</span></h1>
+      <p class="clock" aria-live="off"><span id="clock-time" class="mono">----</span> <span id="clock-watch" class="clock__watch"></span></p>
+    </div>
+    <dl class="strip mono" id="strip" aria-label="System status">
+      <div><dt>env</dt><dd id="sys-env">—</dd></div>
+      <div><dt>llm</dt><dd id="sys-llm">—</dd></div>
+      <div><dt>budget</dt><dd id="sys-budget">—</dd></div>
+      <div><dt>queue</dt><dd id="sys-queue">—</dd></div>
+      <div><dt>sched</dt><dd id="sys-sched">—</dd></div>
+      <div><dt>link</dt><dd id="sys-link" class="link-state">connecting</dd></div>
+    </dl>
+  </header>
+
+  <main class="deck">
+    <!-- I. Post a watch -->
+    <section class="col col--post" aria-labelledby="h-post">
+      <h2 id="h-post" class="col__head"><span class="numeral">I.</span> Post a watch</h2>
+      <form id="plan-form" class="post" autocomplete="off" novalidate>
+        <label for="prompt" class="label">Orders, in plain English</label>
+        <textarea id="prompt" name="prompt" rows="5" maxlength="2000" spellcheck="true"
+          placeholder="Tell me when the laptop at https://shop.example/aurora drops below ₹1,20,000, check every 30 minutes"></textarea>
+        <p class="hint">Name a page, a condition and how often. Quote exact words to watch for.</p>
+        <div class="actions">
+          <button type="submit" id="btn-plan" class="btn">Plan</button>
+        </div>
+      </form>
+
+      <div id="post-msg" class="msgs" role="status" aria-live="polite"></div>
+
+      <form id="spec-form" class="spec" hidden novalidate autocomplete="off">
+        <h3 class="sub">The standing order <span id="plan-source" class="source mono"></span></h3>
+        <table class="spec__table">
+          <tbody>
+            <tr><th scope="row"><label for="f-name">name</label></th>
+              <td><input id="f-name" type="text" maxlength="80" required></td></tr>
+            <tr><th scope="row"><label for="f-kind">kind</label></th>
+              <td><select id="f-kind">
+                <option value="price_below">price below</option>
+                <option value="price_above">price above</option>
+                <option value="text_appears">text appears</option>
+                <option value="text_disappears">text disappears</option>
+                <option value="page_changed">page changed</option>
+              </select></td></tr>
+            <tr><th scope="row"><label for="f-url">url</label></th>
+              <td><input id="f-url" type="url" inputmode="url" required></td></tr>
+            <tr data-for="price"><th scope="row"><label for="f-threshold">threshold</label></th>
+              <td><input id="f-threshold" type="text" inputmode="decimal" placeholder="120000"></td></tr>
+            <tr data-for="text"><th scope="row"><label for="f-keyword">keyword</label></th>
+              <td><input id="f-keyword" type="text" maxlength="120"></td></tr>
+            <tr><th scope="row"><label for="f-selector">selector</label></th>
+              <td><input id="f-selector" type="text" placeholder="optional CSS, e.g. .price-now"></td></tr>
+            <tr><th scope="row"><label for="f-render">render</label></th>
+              <td class="check"><input id="f-render" type="checkbox"> <label for="f-render" class="inline">run the page's JavaScript</label></td></tr>
+            <tr><th scope="row"><label for="f-every">every</label></th>
+              <td><select id="f-every"></select></td></tr>
+          </tbody>
+        </table>
+        <ul id="plan-notes" class="notes" aria-label="Planner notes"></ul>
+        <div class="actions">
+          <button type="button" id="btn-dry" class="btn">Dry run</button>
+          <button type="submit" id="btn-keep" class="btn btn--lamp">Keep watch</button>
+          <button type="button" id="btn-discard" class="btn btn--quiet">Discard</button>
+        </div>
+        <div id="dry-out" class="dry" role="status" aria-live="polite"></div>
+      </form>
+    </section>
+
+    <!-- II. Watches -->
+    <section class="col col--watches" id="watches" aria-labelledby="h-watches" tabindex="-1">
+      <h2 id="h-watches" class="col__head"><span class="numeral">II.</span> Watches <span id="watch-count" class="count mono"></span></h2>
+      <div id="watch-msg" class="msgs" role="status" aria-live="polite"></div>
+      <ul id="watch-list" class="watches"></ul>
+    </section>
+
+    <!-- III. Log -->
+    <section class="col col--log" aria-labelledby="h-log">
+      <h2 id="h-log" class="col__head"><span class="numeral">III.</span> Log</h2>
+      <div id="log-msg" class="msgs" role="status" aria-live="polite"></div>
+      <ol id="log-list" class="log mono" aria-label="Recent checks, newest first"></ol>
+
+      <h3 class="col__head col__head--minor" id="h-inbox">Inbox <span id="inbox-count" class="count mono"></span></h3>
+      <div id="inbox-msg" class="msgs" role="status" aria-live="polite"></div>
+      <ul id="inbox-list" class="inbox" aria-labelledby="h-inbox"></ul>
+    </section>
+  </main>
+
+  <footer class="foot mono">
+    <span>Polls every 5 s.</span> <span>Times are local, 24-hour.</span> <span id="sys-version"></span>
+  </footer>
+</body>
+</html>

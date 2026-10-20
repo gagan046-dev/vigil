@@ -1,0 +1,192 @@
+# 40 - NetworkPolicies: a firewall between pods.
+#
+# Without policies every pod can reach every other pod. Here we start from
+# "deny all incoming traffic" and then open only the paths Vigil needs:
+#
+#   Traefik (kube-system) -> frontend:8080 -> api:8000
+#   CronJob trigger pods  -> api:8000
+#   api/worker/notifier   -> postgres:5432, redis:6379
+#   KEDA (namespace keda) -> redis:6379        (to read the queue length)
+#   worker                -> demo-shop:8000,  Traefik -> demo-shop:8000
+#
+# The worker additionally gets an EGRESS (outgoing) policy: it fetches arbitrary
+# URLs, so it may reach the public internet but NOT private/internal addresses
+# (other than the few Vigil services it needs). This backs up the SSRF guard in
+# the code even if a DNS answer changes between the check and the connection.
+#
+# k3s enforces NetworkPolicy with its embedded controller (kube-router).
+# Probes from the kubelet on the same node are always allowed.
+---
+# 1) Default: deny ALL ingress to every pod in the namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: vigil
+spec:
+  podSelector: {}                               # {} = every pod in the namespace
+  policyTypes: [Ingress]                        # no ingress rules listed = nothing allowed in
+---
+# 2) frontend: only from Traefik (runs in kube-system).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-frontend-from-ingress
+  namespace: vigil
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/component: frontend}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: kube-system}
+      ports:
+        - {protocol: TCP, port: 8080}
+---
+# 3) api: from the frontend (UI calls) and from CronJob trigger pods.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-api
+  namespace: vigil
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/component: api}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/component: frontend}
+        - podSelector:
+            matchLabels: {app.kubernetes.io/component: errand-trigger}
+      ports:
+        - {protocol: TCP, port: 8000}
+---
+# 4) postgres: only from the three Vigil services that use the database.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-postgres
+  namespace: vigil
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/component: postgres}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - {key: app.kubernetes.io/component, operator: In, values: [api, worker, notifier]}
+      ports:
+        - {protocol: TCP, port: 5432}
+---
+# 5) redis: from api/worker/notifier and from KEDA (it reads the list length).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-redis
+  namespace: vigil
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/component: redis}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - {key: app.kubernetes.io/component, operator: In, values: [api, worker, notifier]}
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: keda}
+      ports:
+        - {protocol: TCP, port: 6379}
+---
+# 6) demo shop: from the worker (checks) and Traefik (your browser via demo.localhost).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-demo-shop
+  namespace: vigil
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/component: demo-shop}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/component: worker}
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: kube-system}
+      ports:
+        - {protocol: TCP, port: 8000}
+---
+# 7) llm gateway (production only; harmless when it does not exist): from api and worker.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-llm-gateway
+  namespace: vigil
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/component: llm-gateway}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - {key: app.kubernetes.io/component, operator: In, values: [api, worker]}
+      ports:
+        - {protocol: TCP, port: 4000}
+---
+# 8) worker EGRESS: DNS, the Vigil services it needs, and the PUBLIC internet only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: worker-egress
+  namespace: vigil
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/component: worker}
+  policyTypes: [Egress]                         # from now on only the destinations below are allowed
+  egress:
+    # DNS lookups (CoreDNS in kube-system)
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: kube-system}
+          podSelector:
+            matchLabels: {k8s-app: kube-dns}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    # Vigil's own services
+    - to:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/component: postgres}
+      ports: [{protocol: TCP, port: 5432}]
+    - to:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/component: redis}
+      ports: [{protocol: TCP, port: 6379}]
+    - to:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/component: demo-shop}
+      ports: [{protocol: TCP, port: 8000}]
+    - to:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/component: llm-gateway}
+      ports: [{protocol: TCP, port: 4000}]
+    # Websites: any address EXCEPT private, loopback, link-local (cloud metadata
+    # 169.254.169.254) and carrier-grade NAT ranges.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8                      # includes the k3s pod (10.42/16) and service (10.43/16) ranges
+              - 172.16.0.0/12                   # includes Docker networks
+              - 192.168.0.0/16
+              - 169.254.0.0/16
+              - 100.64.0.0/10
+              - 127.0.0.0/8
+      ports:
+        - {protocol: TCP, port: 80}
+        - {protocol: TCP, port: 443}

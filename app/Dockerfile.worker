@@ -1,0 +1,18 @@
+# vigil-worker: the check worker with Playwright + Chromium (browsers preinstalled in the base image)
+
+FROM mcr.microsoft.com/playwright/python:v1.63.0-noble
+LABEL org.opencontainers.image.source="https://github.com/gagan046-dev/vigil" \
+      org.opencontainers.image.title="vigil-worker"
+ENV PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_BREAK_SYSTEM_PACKAGES=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+WORKDIR /app
+COPY requirements.txt requirements-worker.txt /app/
+RUN pip install -r /app/requirements-worker.txt
+COPY --chown=root:root vigil /app/vigil
+# pwuser (uid 1001) ships with the Playwright image; numeric so runAsNonRoot can verify it
+USER 1001:1001
+EXPOSE 9100
+CMD ["python", "-m", "vigil.worker"]

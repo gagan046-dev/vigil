@@ -1,0 +1,39 @@
+# 01 - ConfigMap: the NON-secret settings shared by every Vigil component.
+# Pods load it with "envFrom: configMapRef", so each key becomes an environment
+# variable that app/vigil/config.py reads. Secrets (passwords, tokens) are NOT
+# here - they live in the Secret "vigil-secrets" (see 02-secret.example.yaml).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vigil-config
+  namespace: vigil
+  labels:
+    app.kubernetes.io/part-of: vigil
+data:
+  VIGIL_ENV: "dev"
+  # Where the data stores are. "vigil-postgres" / "vigil-redis" are Service names:
+  # Kubernetes DNS turns them into the right pod IPs.
+  POSTGRES_HOST: "vigil-postgres"
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: "vigil"
+  POSTGRES_USER: "vigil"
+  REDIS_URL: "redis://vigil-redis:6379/0"
+  # LLM: "fake" = never call a model; every feature uses its deterministic path.
+  LLM_MODE: "fake"
+  LLM_BASE_URL: "http://vigil-llm-gateway:4000/v1"
+  LLM_MODEL: "vigil-smart"
+  LLM_DAILY_BUDGET: "40"
+  # Scheduling: the api creates one Kubernetes CronJob per watch ("errand").
+  SCHEDULER: "kubernetes"
+  SCHEDULE_TZ: "Asia/Kolkata"
+  MIN_INTERVAL_MINUTES: "1"          # dev only; production uses 5
+  TRIGGER_IMAGE: "curlimages/curl:8.22.0"
+  TRIGGER_API_URL: "http://vigil-api:8000"
+  INTERNAL_TOKEN_SECRET: "vigil-secrets"
+  # The SSRF guard blocks private/internal addresses. The demo shop is internal,
+  # so it is explicitly allowed - nothing else is.
+  ALLOWED_INTERNAL_HOSTS: "vigil-demo-shop"
+  HOST_MIN_GAP_MS: "5000"            # politeness: at most one request per host every 5 s
+  DRYRUN_TIMEOUT_SECONDS: "60"
+  # Optional push channels (empty = in-app inbox only). Example: https://ntfy.sh/<your-topic>
+  NTFY_URL: ""

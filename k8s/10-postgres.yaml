@@ -1,0 +1,97 @@
+# 10 - PostgreSQL: stores watches (errands), every check and the notification inbox.
+#
+# A StatefulSet (not a Deployment) is used for databases: its pod keeps a stable
+# name (vigil-postgres-0) and its own PersistentVolumeClaim, so data survives
+# pod restarts and rescheduling.
+---
+# Headless Service ("clusterIP: None"): DNS returns the pod IP directly.
+# The StatefulSet requires one; apps connect to "vigil-postgres:5432".
+apiVersion: v1
+kind: Service
+metadata:
+  name: vigil-postgres
+  namespace: vigil
+  labels: {app.kubernetes.io/name: vigil, app.kubernetes.io/component: postgres, app.kubernetes.io/part-of: vigil}
+spec:
+  clusterIP: None
+  selector: {app.kubernetes.io/name: vigil, app.kubernetes.io/component: postgres}
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: vigil-postgres
+  namespace: vigil
+  labels: {app.kubernetes.io/name: vigil, app.kubernetes.io/component: postgres, app.kubernetes.io/part-of: vigil}
+spec:
+  serviceName: vigil-postgres
+  replicas: 1                                   # one database instance (no replication in this project)
+  selector:
+    matchLabels: {app.kubernetes.io/name: vigil, app.kubernetes.io/component: postgres}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: vigil, app.kubernetes.io/component: postgres, app.kubernetes.io/part-of: vigil}
+    spec:
+      automountServiceAccountToken: false       # postgres never talks to the Kubernetes API
+      securityContext:                          # pod-level security ("restricted" profile)
+        runAsNonRoot: true
+        runAsUser: 70                           # the "postgres" user in the alpine image
+        runAsGroup: 70
+        fsGroup: 70                             # volumes are made writable for group 70
+        seccompProfile: {type: RuntimeDefault}  # block dangerous Linux system calls
+      containers:
+        - name: postgres
+          image: postgres:17.11-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - {name: postgres, containerPort: 5432}
+          env:
+            - {name: POSTGRES_DB, value: vigil}
+            - {name: POSTGRES_USER, value: vigil}
+            - name: POSTGRES_PASSWORD           # read from the Secret, never written in YAML
+              valueFrom:
+                secretKeyRef: {name: vigil-secrets, key: postgres-password}
+            # Data goes in a sub-folder of the volume (initdb wants an empty folder it owns).
+            - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true        # only the mounted volumes below are writable
+            capabilities: {drop: ["ALL"]}
+          resources:
+            requests: {cpu: 50m, memory: 128Mi} # what the scheduler reserves
+            limits: {cpu: 500m, memory: 512Mi}  # hard ceiling (memory over this = OOM kill)
+          # readiness: only send traffic once postgres accepts connections
+          readinessProbe:
+            exec: {command: ["pg_isready", "-U", "vigil", "-d", "vigil", "-h", "127.0.0.1"]}
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          # liveness: restart the container if postgres stops answering for ~1 minute
+          livenessProbe:
+            exec: {command: ["pg_isready", "-U", "vigil", "-d", "vigil", "-h", "127.0.0.1"]}
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 4
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/postgresql/data}
+            - {name: run, mountPath: /var/run/postgresql}   # unix socket + lock file
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+  # One PersistentVolumeClaim per pod. k3s' built-in "local-path" provisioner
+  # creates the actual disk folder on the node.
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels: {app.kubernetes.io/name: vigil, app.kubernetes.io/component: postgres}
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: local-path
+        resources:
+          requests:
+            storage: 1Gi

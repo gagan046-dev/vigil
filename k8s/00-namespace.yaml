@@ -1,0 +1,20 @@
+# 00 - Namespace
+# A namespace is a "folder" inside the cluster. Everything Vigil runs lives in "vigil",
+# so it can be listed, secured and deleted as one unit:  kubectl delete namespace vigil
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vigil
+  labels:
+    app.kubernetes.io/part-of: vigil
+    # Pod Security Admission (built into Kubernetes) checks every pod against the
+    # "restricted" Pod Security Standard - the strictest built-in profile:
+    # non-root user, no privilege escalation, all Linux capabilities dropped,
+    # seccomp on. A pod that breaks these rules is REJECTED (enforce), and
+    # kubectl prints a warning (warn) and the audit log records it (audit).
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: latest

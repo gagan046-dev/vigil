@@ -1,0 +1,29 @@
+# k3d cluster definition for Vigil.
+# k3d runs a real Kubernetes distribution (k3s) inside Docker containers, so the
+# whole cluster lives on this PC. Create it with:
+#   k3d cluster create --config cluster/k3d-config.yaml
+# Delete it with:
+#   k3d cluster delete vigil
+apiVersion: k3d.io/v1alpha5
+kind: Simple
+metadata:
+  name: vigil                     # cluster name -> kube context "k3d-vigil"
+servers: 1                        # control-plane node (runs the Kubernetes API)
+agents: 2                         # worker nodes (run our pods)
+image: rancher/k3s:v1.35.5-k3s1   # pinned k3s (Kubernetes) version
+kubeAPI:
+  host: "127.0.0.1"               # only reachable from this PC
+  hostIP: "127.0.0.1"
+  hostPort: "6550"                # kubectl talks to https://127.0.0.1:6550
+ports:
+  # Host port 8081 -> port 80 of the k3d load balancer -> Traefik ingress inside the cluster.
+  # So http://vigil.localhost:8081 reaches our Ingress. (8080 is used by another project.)
+  - port: 127.0.0.1:8081:80
+    nodeFilters:
+      - loadbalancer
+options:
+  k3d:
+    wait: true                    # block until the nodes are ready
+  kubeconfig:
+    updateDefaultKubeconfig: true # add the cluster to ~/.kube/config
+    switchCurrentContext: true    # and make it the active kubectl context

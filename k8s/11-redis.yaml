@@ -1,0 +1,74 @@
+# 11 - Redis: the job queues (vigil:checks, vigil:notify), de-duplication set,
+# the LLM daily budget counter and per-host politeness keys.
+# "appendonly yes" writes every change to disk, so queued jobs survive a restart.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vigil-redis
+  namespace: vigil
+  labels: {app.kubernetes.io/name: vigil, app.kubernetes.io/component: redis, app.kubernetes.io/part-of: vigil}
+spec:
+  selector: {app.kubernetes.io/name: vigil, app.kubernetes.io/component: redis}
+  ports:
+    - {name: redis, port: 6379, targetPort: redis}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: vigil-redis
+  namespace: vigil
+  labels: {app.kubernetes.io/name: vigil, app.kubernetes.io/component: redis, app.kubernetes.io/part-of: vigil}
+spec:
+  serviceName: vigil-redis
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: vigil, app.kubernetes.io/component: redis}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: vigil, app.kubernetes.io/component: redis, app.kubernetes.io/part-of: vigil}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999                          # the "redis" user in the alpine image
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: redis
+          image: redis:8.2.10-alpine
+          imagePullPolicy: IfNotPresent
+          # --appendonly yes: durable queue; --save "": no extra RDB snapshots;
+          # --maxmemory: keep memory bounded (queues are small)
+          args: ["redis-server", "--appendonly", "yes", "--dir", "/data", "--save", "", "--maxmemory", "200mb"]
+          ports:
+            - {name: redis, containerPort: 6379}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          resources:
+            requests: {cpu: 20m, memory: 32Mi}
+            limits: {cpu: 300m, memory: 256Mi}
+          readinessProbe:
+            exec: {command: ["redis-cli", "ping"]}
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            exec: {command: ["redis-cli", "ping"]}
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            failureThreshold: 4
+          volumeMounts:
+            - {name: data, mountPath: /data}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels: {app.kubernetes.io/name: vigil, app.kubernetes.io/component: redis}
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: local-path
+        resources:
+          requests:
+            storage: 1Gi

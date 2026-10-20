@@ -1,0 +1,150 @@
+# 20 - vigil-api: the FastAPI backend (plans watches, stores them, creates their
+# CronJobs, serves the UI's /api/* calls and the internal trigger endpoint).
+#
+# The api is the ONLY Vigil component allowed to talk to the Kubernetes API, and
+# only to manage CronJobs in its own namespace. That permission is given with
+# RBAC: ServiceAccount (an identity) + Role (what is allowed) + RoleBinding
+# (gives the Role to the identity).
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vigil-api
+  namespace: vigil
+  labels: {app.kubernetes.io/name: vigil, app.kubernetes.io/component: api, app.kubernetes.io/part-of: vigil}
+---
+# A Role is namespaced: these rules apply in namespace "vigil" ONLY
+# (a ClusterRole would apply to the whole cluster - not needed, so not used).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: vigil-api-cronjobs
+  namespace: vigil
+  labels: {app.kubernetes.io/name: vigil, app.kubernetes.io/component: api, app.kubernetes.io/part-of: vigil}
+rules:
+  - apiGroups: ["batch"]                        # CronJobs and Jobs live in the "batch" API group
+    resources: ["cronjobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list"]                      # read-only: to see whether triggers ran
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: vigil-api-cronjobs
+  namespace: vigil
+  labels: {app.kubernetes.io/name: vigil, app.kubernetes.io/component: api, app.kubernetes.io/part-of: vigil}
+subjects:
+  - kind: ServiceAccount
+    name: vigil-api
+    namespace: vigil
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: vigil-api-cronjobs
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vigil-api                               # the frontend proxies /api/ to http://vigil-api:8000
+  namespace: vigil
+  labels: {app.kubernetes.io/name: vigil, app.kubernetes.io/component: api, app.kubernetes.io/part-of: vigil}
+spec:
+  type: ClusterIP                               # reachable inside the cluster only
+  selector: {app.kubernetes.io/name: vigil, app.kubernetes.io/component: api}
+  ports:
+    - {name: http, port: 8000, targetPort: http}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vigil-api
+  namespace: vigil
+  labels: {app.kubernetes.io/name: vigil, app.kubernetes.io/component: api, app.kubernetes.io/part-of: vigil}
+spec:
+  replicas: 2                                   # two copies: one can die/restart while the other serves
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxUnavailable: 0, maxSurge: 1}   # never drop below 2 ready pods during an update
+  selector:
+    matchLabels: {app.kubernetes.io/name: vigil, app.kubernetes.io/component: api}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: vigil, app.kubernetes.io/component: api, app.kubernetes.io/part-of: vigil}
+    spec:
+      serviceAccountName: vigil-api
+      automountServiceAccountToken: true        # needed: the api calls the Kubernetes API (CronJobs)
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001                        # the "vigil" user baked into the vigil-core image
+        runAsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}  # block dangerous Linux system calls
+      # Spread the two replicas over different nodes when possible.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: {app.kubernetes.io/name: vigil, app.kubernetes.io/component: api}
+      # An initContainer runs to completion BEFORE the main container starts.
+      # It creates the database tables (idempotent + advisory lock, so two pods
+      # starting at once is safe) and waits for postgres if it is not up yet.
+      initContainers:
+        - name: migrate
+          image: vigil-core:dev
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "vigil.migrate"]
+          envFrom:
+            - configMapRef: {name: vigil-config}
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: vigil-secrets, key: postgres-password}}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          resources:
+            requests: {cpu: 20m, memory: 64Mi}
+            limits: {cpu: 300m, memory: 128Mi}
+      containers:
+        - name: api
+          image: vigil-core:dev                 # local image imported into k3d
+          imagePullPolicy: IfNotPresent         # use the imported image, never pull
+          # (default command of the image: uvicorn vigil.api:app on port 8000)
+          ports:
+            - {name: http, containerPort: 8000}
+          envFrom:
+            - configMapRef: {name: vigil-config}   # every key of the ConfigMap -> env var
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: vigil-secrets, key: postgres-password}}
+            - name: VIGIL_INTERNAL_TOKEN        # checked on POST /internal/trigger/<id>
+              valueFrom: {secretKeyRef: {name: vigil-secrets, key: internal-token}}
+          securityContext:                      # container-level part of the "restricted" profile
+            allowPrivilegeEscalation: false     # no setuid tricks to become root
+            readOnlyRootFilesystem: true        # the image's files cannot be modified
+            capabilities: {drop: ["ALL"]}       # no special Linux privileges at all
+          resources:
+            requests: {cpu: 50m, memory: 128Mi} # reserved for scheduling
+            limits: {cpu: 500m, memory: 384Mi}  # hard ceiling
+          # liveness = "is the process alive?" (no dependencies, so a DB outage
+          # does not cause pointless restarts)
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            failureThreshold: 3
+          # readiness = "can it serve right now?" (db + redis + schema). A pod that
+          # is not ready is removed from the Service until it recovers.
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}      # root filesystem is read-only; /tmp is scratch space
+      volumes:
+        - name: tmp
+          emptyDir: {}

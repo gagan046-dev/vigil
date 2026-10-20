@@ -1,0 +1,63 @@
+# 22 - vigil-notifier: takes messages from the Redis list "vigil:notify", stores
+# them in the in-app inbox (Postgres) and, if configured, pushes them to ntfy
+# and/or Telegram. One replica is enough (it handles one message at a time).
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vigil-notifier
+  namespace: vigil
+  labels: {app.kubernetes.io/name: vigil, app.kubernetes.io/component: notifier, app.kubernetes.io/part-of: vigil}
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels: {app.kubernetes.io/name: vigil, app.kubernetes.io/component: notifier}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: vigil, app.kubernetes.io/component: notifier, app.kubernetes.io/part-of: vigil}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: notifier
+          image: vigil-core:dev                 # same image as the api, different command
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "vigil.notifier"]
+          ports:
+            - {name: metrics, containerPort: 9101}
+          envFrom:
+            - configMapRef: {name: vigil-config}
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: vigil-secrets, key: postgres-password}}
+            # Optional Telegram delivery: add keys "telegram-bot-token" and
+            # "telegram-chat-id" to the Secret. optional: true = the pod starts without them.
+            - name: TELEGRAM_BOT_TOKEN
+              valueFrom: {secretKeyRef: {name: vigil-secrets, key: telegram-bot-token, optional: true}}
+            - name: TELEGRAM_CHAT_ID
+              valueFrom: {secretKeyRef: {name: vigil-secrets, key: telegram-chat-id, optional: true}}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          resources:
+            requests: {cpu: 20m, memory: 64Mi}
+            limits: {cpu: 200m, memory: 192Mi}
+          livenessProbe:
+            httpGet: {path: /metrics, port: metrics}
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          readinessProbe:
+            httpGet: {path: /metrics, port: metrics}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: tmp
+          emptyDir: {}

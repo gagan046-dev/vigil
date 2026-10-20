@@ -1,0 +1,27 @@
+[project]
+name = "vigil"
+version = "0.1.0"
+description = "Vigil - tell an AI agent in plain English what to watch on the web"
+requires-python = ">=3.12"
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "SIM"]
+ignore = [
+  "S101",   # assert is fine in tests
+  "S104",   # binding 0.0.0.0 is intended inside containers
+  "S311",   # random is not used for crypto
+  "B008",   # FastAPI Depends/Body in defaults
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+filterwarnings = ["ignore:Using `httpx` with `starlette.testclient`"]

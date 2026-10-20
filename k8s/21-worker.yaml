@@ -1,0 +1,103 @@
+# 21 - vigil-worker: takes check jobs from the Redis list "vigil:checks", fetches
+# the page (plain HTTP, or headless Chromium via Playwright for JavaScript pages),
+# extracts the value, evaluates the condition and queues notifications.
+#
+# The number of workers is NOT fixed: KEDA (installed in namespace "keda") watches
+# the length of the Redis list and scales this Deployment between 0 and 5 pods.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vigil-worker
+  namespace: vigil
+  labels: {app.kubernetes.io/name: vigil, app.kubernetes.io/component: worker, app.kubernetes.io/part-of: vigil}
+spec:
+  # No "replicas:" on purpose - KEDA owns the replica count. If we set it here,
+  # every "kubectl apply" would fight KEDA.
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels: {app.kubernetes.io/name: vigil, app.kubernetes.io/component: worker}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: vigil, app.kubernetes.io/component: worker, app.kubernetes.io/part-of: vigil}
+    spec:
+      automountServiceAccountToken: false       # the worker never calls the Kubernetes API
+      # On scale-down Kubernetes sends SIGTERM; the worker finishes the current
+      # check (up to ~60 s worst case) and exits. Give it 90 s before SIGKILL.
+      terminationGracePeriodSeconds: 90
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001                         # "pwuser" from the Playwright image
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: worker
+          image: vigil-worker:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            - {name: metrics, containerPort: 9100}   # Prometheus metrics (vigil_checks_total, ...)
+          envFrom:
+            - configMapRef: {name: vigil-config}
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: vigil-secrets, key: postgres-password}}
+            - {name: HOME, value: /tmp}         # Chromium writes its profile under $HOME
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          resources:
+            requests: {cpu: 100m, memory: 384Mi}
+            limits: {cpu: "1", memory: 1536Mi}  # Chromium is memory-hungry
+          livenessProbe:                        # the metrics server runs in its own thread
+            httpGet: {path: /metrics, port: metrics}
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: {path: /metrics, port: metrics}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            - {name: dshm, mountPath: /dev/shm}  # shared memory for Chromium
+      volumes:
+        - name: tmp
+          emptyDir: {sizeLimit: 512Mi}
+        - name: dshm
+          emptyDir: {medium: Memory, sizeLimit: 256Mi}   # RAM-backed /dev/shm
+---
+# KEDA ScaledObject: "scale vigil-worker on the length of the Redis list".
+# KEDA creates and manages a HorizontalPodAutoscaler (keda-hpa-vigil-worker) for
+# 1..5 pods and itself handles the 0 <-> 1 step (a plain HPA cannot scale to zero).
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: vigil-worker
+  namespace: vigil
+  labels: {app.kubernetes.io/name: vigil, app.kubernetes.io/component: worker, app.kubernetes.io/part-of: vigil}
+spec:
+  scaleTargetRef:
+    name: vigil-worker                          # the Deployment above
+  minReplicaCount: 0                            # dev: no jobs -> no worker pods (saves ~400 MB RAM)
+  maxReplicaCount: 5
+  pollingInterval: 10                           # look at the queue every 10 s
+  cooldownPeriod: 60                            # 60 s of empty queue before scaling back to 0
+  # The HPA normally remembers its highest wish of the last 5 minutes before
+  # scaling down. Without this, a single job arriving right after a burst
+  # brings back all 5 pods. 30 s is enough to smooth out short dips.
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: 30
+          policies:
+            - {type: Percent, value: 100, periodSeconds: 15}
+  triggers:
+    - type: redis
+      metadata:
+        address: vigil-redis.vigil.svc.cluster.local:6379
+        listName: "vigil:checks"
+        listLength: "3"                         # target: about 3 queued jobs per worker pod
+        activationListLength: "0"               # any queued job at all wakes the first worker

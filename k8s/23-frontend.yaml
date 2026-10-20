@@ -1,0 +1,63 @@
+# 23 - vigil-frontend: the "night-watch logbook" web UI. nginx (unprivileged,
+# port 8080) serves the static files and forwards /api/* to the vigil-api Service.
+# Note: nginx looks up "vigil-api" once when it starts, so apply 20-api.yaml first.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vigil-frontend
+  namespace: vigil
+  labels: {app.kubernetes.io/name: vigil, app.kubernetes.io/component: frontend, app.kubernetes.io/part-of: vigil}
+spec:
+  selector: {app.kubernetes.io/name: vigil, app.kubernetes.io/component: frontend}
+  ports:
+    - {name: http, port: 8080, targetPort: http}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vigil-frontend
+  namespace: vigil
+  labels: {app.kubernetes.io/name: vigil, app.kubernetes.io/component: frontend, app.kubernetes.io/part-of: vigil}
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxUnavailable: 0, maxSurge: 1}
+  selector:
+    matchLabels: {app.kubernetes.io/name: vigil, app.kubernetes.io/component: frontend}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: vigil, app.kubernetes.io/component: frontend, app.kubernetes.io/part-of: vigil}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101                          # "nginx" user of nginx-unprivileged
+        runAsGroup: 101
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: frontend
+          image: vigil-frontend:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            - {name: http, containerPort: 8080} # unprivileged port (no root needed)
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {cpu: 200m, memory: 64Mi}
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 15
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 5
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}      # nginx pid file + temp/cache folders
+      volumes:
+        - name: tmp
+          emptyDir: {}
