@@ -1,0 +1,97 @@
+{{- /*
+PostgreSQL: stores watches (errands), every check and the notification inbox.
+A StatefulSet keeps a stable pod name (vigil-postgres-0) and its own
+PersistentVolumeClaim, so the data survives restarts.
+*/ -}}
+{{- $sel := include "vigil.selectorLabels" (dict "root" . "component" "postgres") }}
+# Headless Service (clusterIP: None): DNS returns the pod IP directly.
+apiVersion: v1
+kind: Service
+metadata:
+  name: vigil-postgres
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vigil.labels" (dict "root" . "component" "postgres") | nindent 4 }}
+spec:
+  clusterIP: None
+  selector:
+    {{- $sel | nindent 4 }}
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: vigil-postgres
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vigil.labels" (dict "root" . "component" "postgres") | nindent 4 }}
+spec:
+  serviceName: vigil-postgres
+  replicas: 1                                   # one database instance (no replication)
+  selector:
+    matchLabels:
+      {{- $sel | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "vigil.labels" (dict "root" . "component" "postgres") | nindent 8 }}
+      {{- if .Values.secrets.create }}
+      annotations:
+        # restart postgres if the chart-made Secret changes
+        checksum/secret: {{ include (print .Template.BasePath "/secret.yaml") . | sha256sum }}
+      {{- end }}
+    spec:
+      automountServiceAccountToken: false       # postgres never talks to the Kubernetes API
+      {{- include "vigil.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        {{- include "vigil.podSecurity" (dict "uid" 70 "fsGroup" 70) | nindent 8 }}
+      containers:
+        - name: postgres
+          image: {{ include "vigil.image" (dict "root" . "image" .Values.postgres.image) }}
+          imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
+          ports:
+            - {name: postgres, containerPort: 5432}
+          env:
+            - {name: POSTGRES_DB, value: {{ .Values.postgres.database | quote }}}
+            - {name: POSTGRES_USER, value: {{ .Values.postgres.user | quote }}}
+            {{- include "vigil.envPostgresPassword" . | nindent 12 }}
+            # data in a sub-folder of the volume (initdb wants an empty folder it owns)
+            - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
+          securityContext:
+            {{- include "vigil.containerSecurity" dict | nindent 12 }}
+          resources:
+            {{- toYaml .Values.postgres.resources | nindent 12 }}
+          readinessProbe:                       # only send traffic once it accepts connections
+            exec: {command: ["pg_isready", "-U", {{ .Values.postgres.user | quote }}, "-d", {{ .Values.postgres.database | quote }}, "-h", "127.0.0.1"]}
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:                        # restart if it stops answering for ~1 minute
+            exec: {command: ["pg_isready", "-U", {{ .Values.postgres.user | quote }}, "-d", {{ .Values.postgres.database | quote }}, "-h", "127.0.0.1"]}
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 4
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/postgresql/data}
+            - {name: run, mountPath: /var/run/postgresql}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- $sel | nindent 10 }}
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.postgres.storage.storageClassName }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.postgres.storage.size }}

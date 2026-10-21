@@ -1,0 +1,64 @@
+{{- /*
+vigil-demo-shop (DEV ONLY, demoShop.enabled): a tiny fake shop so demos and tests
+never scrape real websites. State is in memory - keep ONE replica.
+*/ -}}
+{{- if .Values.demoShop.enabled }}
+{{- $sel := include "vigil.selectorLabels" (dict "root" . "component" "demo-shop") }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: vigil-demo-shop                         # watches use http://vigil-demo-shop:8000/...
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vigil.labels" (dict "root" . "component" "demo-shop") | nindent 4 }}
+spec:
+  selector:
+    {{- $sel | nindent 4 }}
+  ports:
+    - {name: http, port: 8000, targetPort: http}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vigil-demo-shop
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vigil.labels" (dict "root" . "component" "demo-shop") | nindent 4 }}
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      {{- $sel | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "vigil.labels" (dict "root" . "component" "demo-shop") | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      {{- include "vigil.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        {{- include "vigil.podSecurity" (dict "uid" 10001) | nindent 8 }}
+      containers:
+        - name: demo-shop
+          image: {{ include "vigil.image" (dict "root" . "image" .Values.demoShop.image) }}
+          imagePullPolicy: {{ .Values.demoShop.image.pullPolicy }}
+          command: ["uvicorn", "vigil.demo_shop:app", "--host", "0.0.0.0", "--port", "8000", "--no-server-header"]
+          ports:
+            - {name: http, containerPort: 8000}
+          securityContext:
+            {{- include "vigil.containerSecurity" dict | nindent 12 }}
+          resources:
+            {{- toYaml .Values.demoShop.resources | nindent 12 }}
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 15
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 5
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+{{- end }}

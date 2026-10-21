@@ -1,0 +1,64 @@
+{{- /*
+vigil-notifier: takes messages from the Redis list "vigil:notify", stores them in the
+in-app inbox (Postgres) and, if configured, pushes them to ntfy and/or Telegram.
+*/ -}}
+{{- $sel := include "vigil.selectorLabels" (dict "root" . "component" "notifier") }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vigil-notifier
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vigil.labels" (dict "root" . "component" "notifier") | nindent 4 }}
+spec:
+  replicas: {{ .Values.notifier.replicas }}
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      {{- $sel | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "vigil.labels" (dict "root" . "component" "notifier") | nindent 8 }}
+      annotations:
+        {{- include "vigil.configChecksums" . | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      {{- include "vigil.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        {{- include "vigil.podSecurity" (dict "uid" 10001) | nindent 8 }}
+      containers:
+        - name: notifier
+          image: {{ include "vigil.image" (dict "root" . "image" .Values.notifier.image) }}
+          imagePullPolicy: {{ .Values.notifier.image.pullPolicy }}
+          command: ["python", "-m", "vigil.notifier"]   # same image as the api, other command
+          ports:
+            - {name: metrics, containerPort: 9101}
+          envFrom:
+            - configMapRef: {name: vigil-config}
+          env:
+            {{- include "vigil.envPostgresPassword" . | nindent 12 }}
+            # Optional Telegram delivery (optional: true = the pod starts without them).
+            - name: TELEGRAM_BOT_TOKEN
+              valueFrom:
+                secretKeyRef: {name: {{ .Values.secrets.name }}, key: telegram-bot-token, optional: true}
+            - name: TELEGRAM_CHAT_ID
+              valueFrom:
+                secretKeyRef: {name: {{ .Values.secrets.name }}, key: telegram-chat-id, optional: true}
+          securityContext:
+            {{- include "vigil.containerSecurity" dict | nindent 12 }}
+          resources:
+            {{- toYaml .Values.notifier.resources | nindent 12 }}
+          livenessProbe:
+            httpGet: {path: /metrics, port: metrics}
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          readinessProbe:
+            httpGet: {path: /metrics, port: metrics}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: tmp
+          emptyDir: {}

@@ -1,0 +1,30 @@
+# values-prod.yaml - the "production" environment.
+# Only the settings that differ from values.yaml are listed here.
+
+environment: prod
+
+config:
+  llmMode: gateway                    # use the LiteLLM gateway below
+  minIntervalMinutes: 5               # be polite to websites: at most every 5 minutes
+  allowedInternalHosts: ""            # no internal hosts may be watched
+
+# The Secret "vigil-secrets" must ALREADY exist in the namespace (in Phase 3 it comes
+# from a SealedSecret). Required keys: postgres-password, internal-token.
+# Optional keys: openrouter-api-key, llm-master-key, telegram-bot-token, telegram-chat-id.
+secrets:
+  create: false
+  name: vigil-secrets
+
+worker:
+  autoscaling:
+    minReplicas: 1                    # always one warm worker (no cold start)
+
+demoShop:
+  enabled: false
+
+llmGateway:
+  enabled: true                       # starts even without an OpenRouter key (optional secretKeyRef)
+
+ingress:
+  hosts:
+    app: vigil-prod.localhost

@@ -1,0 +1,146 @@
+{{- /*
+vigil-api: the FastAPI backend. Plans watches, stores them, creates their CronJobs,
+serves the UI's /api/* calls and the internal trigger endpoint.
+
+It is the ONLY component allowed to talk to the Kubernetes API, and only to manage
+CronJobs in its own namespace: ServiceAccount (identity) + Role (what is allowed,
+namespaced) + RoleBinding (gives the Role to the identity).
+*/ -}}
+{{- $sel := include "vigil.selectorLabels" (dict "root" . "component" "api") }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vigil-api
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vigil.labels" (dict "root" . "component" "api") | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role                                      # namespaced: applies to this namespace ONLY
+metadata:
+  name: vigil-api-cronjobs
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vigil.labels" (dict "root" . "component" "api") | nindent 4 }}
+rules:
+  - apiGroups: ["batch"]                        # CronJobs and Jobs live in the "batch" API group
+    resources: ["cronjobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list"]                      # read-only
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: vigil-api-cronjobs
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vigil.labels" (dict "root" . "component" "api") | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: vigil-api
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: vigil-api-cronjobs
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vigil-api                               # the frontend's nginx proxies /api/ here
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vigil.labels" (dict "root" . "component" "api") | nindent 4 }}
+spec:
+  type: ClusterIP                               # reachable inside the cluster only
+  selector:
+    {{- $sel | nindent 4 }}
+  ports:
+    - {name: http, port: 8000, targetPort: http}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vigil-api
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vigil.labels" (dict "root" . "component" "api") | nindent 4 }}
+spec:
+  replicas: {{ .Values.api.replicas }}
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxUnavailable: 0, maxSurge: 1}   # never fewer ready pods during an update
+  selector:
+    matchLabels:
+      {{- $sel | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "vigil.labels" (dict "root" . "component" "api") | nindent 8 }}
+      annotations:
+        {{- include "vigil.configChecksums" . | nindent 8 }}
+    spec:
+      serviceAccountName: vigil-api
+      automountServiceAccountToken: true        # needed: the api manages CronJobs
+      {{- include "vigil.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        {{- include "vigil.podSecurity" (dict "uid" 10001) | nindent 8 }}
+      topologySpreadConstraints:                # spread replicas over nodes when possible
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- $sel | nindent 14 }}
+      # Runs to completion BEFORE the api starts: creates the tables (idempotent, under
+      # a Postgres advisory lock, so several pods starting at once is safe).
+      initContainers:
+        - name: migrate
+          image: {{ include "vigil.image" (dict "root" . "image" .Values.api.image) }}
+          imagePullPolicy: {{ .Values.api.image.pullPolicy }}
+          command: ["python", "-m", "vigil.migrate"]
+          envFrom:
+            - configMapRef: {name: vigil-config}
+          env:
+            {{- include "vigil.envPostgresPassword" . | nindent 12 }}
+          securityContext:
+            {{- include "vigil.containerSecurity" dict | nindent 12 }}
+          resources:
+            {{- toYaml .Values.api.migrateResources | nindent 12 }}
+      containers:
+        - name: api
+          image: {{ include "vigil.image" (dict "root" . "image" .Values.api.image) }}
+          imagePullPolicy: {{ .Values.api.image.pullPolicy }}
+          # (default command of the image: uvicorn vigil.api:app on port 8000)
+          ports:
+            - {name: http, containerPort: 8000}
+          envFrom:
+            - configMapRef: {name: vigil-config}   # every ConfigMap key -> env var
+          env:
+            {{- include "vigil.envPostgresPassword" . | nindent 12 }}
+            - name: VIGIL_INTERNAL_TOKEN        # checked on POST /internal/trigger/<id>
+              valueFrom:
+                secretKeyRef: {name: {{ .Values.secrets.name }}, key: internal-token}
+            {{- include "vigil.envLlmKey" . | nindent 12 }}
+          securityContext:
+            {{- include "vigil.containerSecurity" dict | nindent 12 }}
+          resources:
+            {{- toYaml .Values.api.resources | nindent 12 }}
+          livenessProbe:                        # process alive? (no dependencies)
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            failureThreshold: 3
+          readinessProbe:                       # can serve right now? (db + redis + schema)
+            httpGet: {path: /readyz, port: http}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}      # root filesystem is read-only
+      volumes:
+        - name: tmp
+          emptyDir: {}

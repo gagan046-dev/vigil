@@ -1,0 +1,33 @@
+{{- /*
+"helm test vigil -n <namespace>" runs this pod once. It asks the api's /readyz
+(database + redis + schema) through the Service. Exit code 0 = test passed.
+The pod is labelled component=helm-test so the api NetworkPolicy lets it in, and it
+follows the "restricted" Pod Security profile like every other Vigil pod.
+*/ -}}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vigil-test-api
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vigil.labels" (dict "root" . "component" "helm-test") | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+    # delete an old test pod before a new run; keep a failed one for "kubectl logs"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    {{- include "vigil.podSecurity" (dict "uid" 100) | nindent 4 }}
+  containers:
+    - name: readyz
+      image: {{ include "vigil.image" (dict "root" . "image" .Values.tests.image) }}
+      imagePullPolicy: {{ .Values.tests.image.pullPolicy }}
+      # -f: fail on HTTP >= 400 (503 = not ready); retry while pods settle
+      args: ["-fsS", "-m", "10", "--retry", "5", "--retry-delay", "3", "--retry-all-errors", "http://vigil-api:8000/readyz"]
+      securityContext:
+        {{- include "vigil.containerSecurity" dict | nindent 8 }}
+      resources:
+        requests: {cpu: 10m, memory: 16Mi}
+        limits: {cpu: 100m, memory: 32Mi}

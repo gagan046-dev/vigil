@@ -1,0 +1,211 @@
+{{- /*
+NetworkPolicies: a firewall between pods. Start from "deny all incoming traffic",
+then open only the paths Vigil needs:
+
+  Traefik (ingress namespace) -> frontend:8080 -> api:8000
+  CronJob trigger pods + helm test pod -> api:8000
+  api/worker/notifier -> postgres:5432, redis:6379;  KEDA -> redis:6379
+  worker -> demo-shop:8000;  Traefik -> demo-shop:8000
+  api/worker -> llm-gateway:4000
+
+The worker also gets an EGRESS policy: it fetches arbitrary URLs, so it may reach the
+public internet but NOT private/internal ranges (backs up the SSRF guard in the code,
+even if a DNS answer changes between the check and the connection).
+k3s enforces NetworkPolicy with its embedded controller. Kubelet probes are always allowed.
+*/ -}}
+{{- if .Values.networkPolicies.enabled }}
+{{- $ns := .Release.Namespace }}
+{{- $ingressNs := .Values.networkPolicies.ingressControllerNamespace }}
+# 1) Default: deny ALL ingress to every pod in the namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: {{ $ns }}
+  labels:
+    {{- include "vigil.labels" (dict "root" . "component" "network-policy") | nindent 4 }}
+spec:
+  podSelector: {}                               # {} = every pod in the namespace
+  policyTypes: [Ingress]                        # no rules listed = nothing allowed in
+---
+# 2) frontend: only from the ingress controller (Traefik).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-frontend-from-ingress
+  namespace: {{ $ns }}
+  labels:
+    {{- include "vigil.labels" (dict "root" . "component" "network-policy") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/component: frontend}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: {{ $ingressNs }}}
+      ports:
+        - {protocol: TCP, port: 8080}
+---
+# 3) api: from the frontend, CronJob trigger pods and the "helm test" pod.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-api
+  namespace: {{ $ns }}
+  labels:
+    {{- include "vigil.labels" (dict "root" . "component" "network-policy") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/component: api}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - {key: app.kubernetes.io/component, operator: In, values: [frontend, errand-trigger, helm-test]}
+      ports:
+        - {protocol: TCP, port: 8000}
+---
+# 4) postgres: only from the three services that use the database.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-postgres
+  namespace: {{ $ns }}
+  labels:
+    {{- include "vigil.labels" (dict "root" . "component" "network-policy") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/component: postgres}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - {key: app.kubernetes.io/component, operator: In, values: [api, worker, notifier]}
+      ports:
+        - {protocol: TCP, port: 5432}
+---
+# 5) redis: from api/worker/notifier and from KEDA (it reads the list length).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-redis
+  namespace: {{ $ns }}
+  labels:
+    {{- include "vigil.labels" (dict "root" . "component" "network-policy") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/component: redis}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - {key: app.kubernetes.io/component, operator: In, values: [api, worker, notifier]}
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: {{ .Values.networkPolicies.kedaNamespace }}}
+      ports:
+        - {protocol: TCP, port: 6379}
+{{- if .Values.demoShop.enabled }}
+---
+# 6) demo shop: from the worker (checks) and Traefik (your browser via the demo host).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-demo-shop
+  namespace: {{ $ns }}
+  labels:
+    {{- include "vigil.labels" (dict "root" . "component" "network-policy") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/component: demo-shop}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/component: worker}
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: {{ $ingressNs }}}
+      ports:
+        - {protocol: TCP, port: 8000}
+{{- end }}
+{{- if .Values.llmGateway.enabled }}
+---
+# 7) llm gateway: from api and worker.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-llm-gateway
+  namespace: {{ $ns }}
+  labels:
+    {{- include "vigil.labels" (dict "root" . "component" "network-policy") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/component: llm-gateway}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - {key: app.kubernetes.io/component, operator: In, values: [api, worker]}
+      ports:
+        - {protocol: TCP, port: 4000}
+{{- end }}
+{{- if .Values.worker.egressPolicy.enabled }}
+---
+# 8) worker EGRESS: DNS, the Vigil services it needs, and the PUBLIC internet only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: worker-egress
+  namespace: {{ $ns }}
+  labels:
+    {{- include "vigil.labels" (dict "root" . "component" "network-policy") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/component: worker}
+  policyTypes: [Egress]                         # only the destinations below are allowed out
+  egress:
+    - to:                                       # DNS lookups (CoreDNS)
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: kube-system}
+          podSelector:
+            matchLabels: {k8s-app: kube-dns}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/component: postgres}
+      ports: [{protocol: TCP, port: 5432}]
+    - to:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/component: redis}
+      ports: [{protocol: TCP, port: 6379}]
+    {{- if .Values.demoShop.enabled }}
+    - to:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/component: demo-shop}
+      ports: [{protocol: TCP, port: 8000}]
+    {{- end }}
+    {{- if .Values.llmGateway.enabled }}
+    - to:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/component: llm-gateway}
+      ports: [{protocol: TCP, port: 4000}]
+    {{- end }}
+    # Websites: any address EXCEPT private, loopback, link-local (cloud metadata
+    # 169.254.169.254) and carrier-grade NAT ranges.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              {{- toYaml .Values.worker.egressPolicy.blockedCidrs | nindent 14 }}
+      ports:
+        {{- range .Values.worker.egressPolicy.allowedPorts }}
+        - {protocol: TCP, port: {{ . }}}
+        {{- end }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,41 @@
+{{- /*
+ConfigMap "vigil-config": the NON-secret settings. Pods load it with envFrom, so each
+key becomes an environment variable read by app/vigil/config.py.
+Every value is quoted: ConfigMap values must be strings.
+*/ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vigil-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vigil.labels" (dict "root" . "component" "config") | nindent 4 }}
+data:
+  VIGIL_ENV: {{ .Values.environment | quote }}
+  # Data stores, by Service name (Kubernetes DNS resolves them).
+  POSTGRES_HOST: "vigil-postgres"
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: {{ .Values.postgres.database | quote }}
+  POSTGRES_USER: {{ .Values.postgres.user | quote }}
+  REDIS_URL: "redis://vigil-redis:6379/0"
+  # LLM
+  LLM_MODE: {{ .Values.config.llmMode | quote }}
+  LLM_BASE_URL: {{ .Values.config.llmBaseUrl | quote }}
+  LLM_MODEL: {{ .Values.config.llmModel | quote }}
+  LLM_DAILY_BUDGET: {{ .Values.config.llmDailyBudget | quote }}
+  # Scheduling: the api creates one CronJob per watch.
+  SCHEDULER: {{ .Values.config.scheduler | quote }}
+  SCHEDULE_TZ: {{ .Values.config.scheduleTimezone | quote }}
+  MIN_INTERVAL_MINUTES: {{ .Values.config.minIntervalMinutes | quote }}
+  TRIGGER_IMAGE: {{ include "vigil.image" (dict "root" . "image" .Values.trigger.image) | quote }}
+  TRIGGER_API_URL: "http://vigil-api:8000"
+  INTERNAL_TOKEN_SECRET: {{ .Values.secrets.name | quote }}
+  # Fetching
+  ALLOWED_INTERNAL_HOSTS: {{ .Values.config.allowedInternalHosts | quote }}
+  HOST_MIN_GAP_MS: {{ .Values.config.hostMinGapMs | quote }}
+  DRYRUN_TIMEOUT_SECONDS: {{ .Values.config.dryrunTimeoutSeconds | quote }}
+  # Notifications
+  NTFY_URL: {{ .Values.config.ntfyUrl | quote }}
+  {{- range $k, $v := .Values.config.extra }}
+  {{ $k }}: {{ $v | quote }}
+  {{- end }}

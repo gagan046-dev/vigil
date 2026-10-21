@@ -1,0 +1,15 @@
+# Chart.yaml - the "identity card" of the Helm chart.
+apiVersion: v2                 # v2 = Helm 3+ chart format
+name: vigil
+description: >-
+  Vigil - tell an AI agent in plain English what to watch on the web; it checks on a
+  schedule (one Kubernetes CronJob per watch) and notifies you only when your
+  condition is met.
+type: application
+version: 0.1.0                 # version of the CHART (bump when templates/values change)
+appVersion: "0.1.0"            # version of the Vigil APP it deploys (app/vigil/config.py VERSION)
+home: https://github.com/gagan046-dev/vigil
+sources:
+  - https://github.com/gagan046-dev/vigil
+keywords: [web-watcher, cronjob, keda, playwright, fastapi]
+kubeVersion: ">=1.29.0-0"      # CronJob timeZone + KEDA 2.21 need a recent Kubernetes

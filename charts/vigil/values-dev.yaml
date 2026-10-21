@@ -1,0 +1,31 @@
+# values-dev.yaml - local development on the k3d cluster.
+# Only the settings that differ from values.yaml are listed here.
+#
+#   helm install vigil charts/vigil -n vigil --create-namespace -f charts/vigil/values-dev.yaml
+
+environment: dev
+
+config:
+  llmMode: fake                       # no model calls; deterministic paths only
+  minIntervalMinutes: 1               # allow "every minute" watches for quick demos
+  allowedInternalHosts: vigil-demo-shop   # let the SSRF guard through to the demo shop
+
+# DEV ONLY - the chart creates the Secret with these fixed placeholder values.
+# They are NOT secret (they are in a public git repo) and must never be used anywhere
+# reachable from outside this PC. Production uses secrets.create: false + a SealedSecret.
+secrets:
+  create: true
+  postgresPassword: dev-only-insecure-postgres-password
+  internalToken: dev-only-insecure-internal-token
+
+worker:
+  autoscaling:
+    minReplicas: 0                    # no queued checks -> no worker pods (saves ~400 MB RAM)
+
+demoShop:
+  enabled: true
+
+ingress:
+  hosts:
+    app: vigil.localhost
+    demo: demo.localhost

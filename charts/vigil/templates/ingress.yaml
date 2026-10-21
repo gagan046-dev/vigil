@@ -1,0 +1,45 @@
+{{- /*
+Ingress: how traffic from your browser gets in.
+  browser -> 127.0.0.1:8081 -> k3d load balancer -> Traefik -> Service -> pod
+Traefik picks the backend by the Host header (ingress.hosts.*).
+*/ -}}
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: vigil
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vigil.labels" (dict "root" . "component" "ingress") | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- with .Values.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.hosts.app | quote }}   # the UI (+ /api via the frontend's nginx)
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: vigil-frontend
+                port: {number: 8080}
+    {{- if and .Values.demoShop.enabled .Values.ingress.hosts.demo }}
+    - host: {{ .Values.ingress.hosts.demo | quote }}  # the demo shop (dev only)
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: vigil-demo-shop
+                port: {number: 8000}
+    {{- end }}
+{{- end }}

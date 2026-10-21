@@ -1,0 +1,238 @@
+# values.yaml - DEFAULT settings of the Vigil chart.
+#
+# Every template reads its settings from here ("{{ .Values.api.replicas }}" etc.).
+# Environment files only list what DIFFERS from these defaults:
+#   values-dev.yaml   local k3d development (demo shop, fake LLM, 1-minute checks)
+#   values-prod.yaml  "production" (no demo shop, LLM gateway, existing Secret)
+#
+#   helm install vigil charts/vigil -n vigil --create-namespace -f charts/vigil/values-dev.yaml
+#
+# NOTE ON NAMES: all objects are called "vigil-<component>" (vigil-api, vigil-redis, ...),
+# NOT "<release>-<component>". The app and the frontend's nginx have these Service names
+# built in, and every environment lives in its own namespace, so there is no clash.
+# Install ONE release per namespace.
+
+# ---------------------------------------------------------------- general
+# Shown in the UI's system strip and in /api/system ("dev", "prod", ...).
+environment: dev
+
+# Create the Namespace object from this chart (with the Pod Security labels below).
+# Normally false: "helm install --create-namespace" or Argo CD creates the namespace,
+# and the PSS labels are then applied with "namespace.labels" by whoever creates it.
+namespace:
+  create: false
+  # Pod Security Standard enforced on the namespace (only used when create: true).
+  podSecurity: restricted
+
+# Pulled-image credentials for a private registry (e.g. [{name: ghcr-pull}]). Empty = public images.
+imagePullSecrets: []
+
+# Extra labels added to every object.
+commonLabels: {}
+
+# ---------------------------------------------------------------- app settings
+# These become the ConfigMap "vigil-config"; every Vigil pod loads it as env vars.
+config:
+  # LLM: "fake" = never call a model (every feature uses its deterministic path);
+  # "gateway" = call the LiteLLM gateway (see llmGateway below).
+  llmMode: fake
+  llmBaseUrl: http://vigil-llm-gateway:4000/v1
+  llmModel: vigil-smart               # model alias defined in the gateway's config
+  llmDailyBudget: 40                  # max LLM calls per day (counter in Redis)
+  scheduler: kubernetes               # kubernetes = one CronJob per watch | internal | none
+  scheduleTimezone: Asia/Kolkata      # CronJob spec.timeZone
+  minIntervalMinutes: 5               # the most frequent check a user may ask for
+  # The SSRF guard blocks private/internal addresses; these host names are let through.
+  allowedInternalHosts: ""
+  hostMinGapMs: 5000                  # politeness: one request per website every 5 s
+  dryrunTimeoutSeconds: 60
+  ntfyUrl: ""                         # optional push channel, e.g. https://ntfy.sh/<topic>
+  # Free-form extra env vars for the ConfigMap, e.g. {SOME_FLAG: "1"}.
+  extra: {}
+
+# ---------------------------------------------------------------- secrets
+# The Secret holds postgres-password and internal-token (+ optional keys:
+# llm-master-key, openrouter-api-key, telegram-bot-token, telegram-chat-id).
+secrets:
+  # Name of the Secret every pod reads. The api also tells CronJob trigger pods to read
+  # "internal-token" from it.
+  name: vigil-secrets
+  # true  = this chart creates the Secret from the values below (dev only!)
+  # false = the Secret must already exist (created by a script or a SealedSecret).
+  create: false
+  postgresPassword: ""
+  internalToken: ""
+
+# ---------------------------------------------------------------- api
+api:
+  replicas: 2
+  image:
+    registry: ""                      # e.g. ghcr.io (empty = local / Docker Hub)
+    repository: vigil-core
+    tag: dev
+    pullPolicy: IfNotPresent
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 384Mi}
+  migrateResources:                   # the "python -m vigil.migrate" initContainer
+    requests: {cpu: 20m, memory: 64Mi}
+    limits: {cpu: 300m, memory: 128Mi}
+
+# ---------------------------------------------------------------- worker
+worker:
+  image:
+    registry: ""
+    repository: vigil-worker
+    tag: dev
+    pullPolicy: IfNotPresent
+  # Used only when autoscaling.enabled is false.
+  replicas: 1
+  resources:
+    requests: {cpu: 100m, memory: 384Mi}
+    limits: {cpu: "1", memory: 1536Mi}
+  terminationGracePeriodSeconds: 90   # finish the current check on scale-down
+  shmSize: 256Mi                      # RAM-backed /dev/shm for Chromium
+  # KEDA ScaledObject: scale on the length of the Redis list "vigil:checks".
+  # Needs KEDA installed in the cluster (namespace "keda").
+  autoscaling:
+    enabled: true
+    minReplicas: 1                    # 0 = scale to zero when the queue is empty
+    maxReplicas: 5
+    listLength: 3                     # target queued jobs per worker pod
+    pollingInterval: 10
+    cooldownPeriod: 60
+    scaleDownStabilizationSeconds: 30
+  # Egress NetworkPolicy: block private address ranges (backs up the SSRF guard).
+  egressPolicy:
+    enabled: true
+    allowedPorts: [80, 443]
+    blockedCidrs:
+      - 10.0.0.0/8
+      - 172.16.0.0/12
+      - 192.168.0.0/16
+      - 169.254.0.0/16
+      - 100.64.0.0/10
+      - 127.0.0.0/8
+
+# ---------------------------------------------------------------- notifier
+notifier:
+  replicas: 1
+  image:
+    registry: ""
+    repository: vigil-core
+    tag: dev
+    pullPolicy: IfNotPresent
+  resources:
+    requests: {cpu: 20m, memory: 64Mi}
+    limits: {cpu: 200m, memory: 192Mi}
+
+# ---------------------------------------------------------------- frontend
+frontend:
+  replicas: 2
+  image:
+    registry: ""
+    repository: vigil-frontend
+    tag: dev
+    pullPolicy: IfNotPresent
+  resources:
+    requests: {cpu: 10m, memory: 16Mi}
+    limits: {cpu: 200m, memory: 64Mi}
+
+# ---------------------------------------------------------------- demo shop (dev only)
+demoShop:
+  enabled: false
+  image:
+    registry: ""
+    repository: vigil-core
+    tag: dev
+    pullPolicy: IfNotPresent
+  resources:
+    requests: {cpu: 10m, memory: 48Mi}
+    limits: {cpu: 200m, memory: 128Mi}
+
+# ---------------------------------------------------------------- postgres
+postgres:
+  image:
+    registry: ""
+    repository: postgres
+    tag: 17.11-alpine
+    pullPolicy: IfNotPresent
+  database: vigil
+  user: vigil
+  storage:
+    size: 1Gi
+    storageClassName: local-path      # k3s' built-in provisioner
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 512Mi}
+
+# ---------------------------------------------------------------- redis
+redis:
+  image:
+    registry: ""
+    repository: redis
+    tag: 8.2.10-alpine
+    pullPolicy: IfNotPresent
+  maxMemory: 200mb
+  storage:
+    size: 1Gi
+    storageClassName: local-path
+  resources:
+    requests: {cpu: 20m, memory: 32Mi}
+    limits: {cpu: 300m, memory: 256Mi}
+
+# ---------------------------------------------------------------- CronJob trigger pods
+# Not deployed by Helm: the api creates one CronJob per watch at runtime. These values
+# only tell the api which image to use for the tiny curl pod each CronJob starts.
+trigger:
+  image:
+    registry: ""
+    repository: curlimages/curl
+    tag: 8.22.0
+
+# ---------------------------------------------------------------- LLM gateway (LiteLLM)
+llmGateway:
+  enabled: false
+  replicas: 1
+  image:
+    registry: ghcr.io
+    repository: berriai/litellm
+    tag: v1.103.2
+    pullPolicy: IfNotPresent
+  # Model routing: the app always asks for "vigil-smart"; LiteLLM forwards it to the
+  # primary model and, if that fails, to the fallback.
+  primaryModel: openrouter/nvidia/nemotron-3-super-120b-a12b:free
+  fallbackModel: openrouter/google/gemma-4-31b-it:free
+  # Keys are read from the Secret (secrets.name) with optional: true, so the gateway
+  # starts without them; LLM calls then fail and Vigil uses its deterministic fallbacks.
+  apiKeySecretKey: openrouter-api-key
+  masterKeySecretKey: llm-master-key
+  resources:
+    requests: {cpu: 50m, memory: 256Mi}
+    limits: {cpu: "1", memory: 1Gi}
+
+# ---------------------------------------------------------------- ingress
+ingress:
+  enabled: true
+  className: traefik                  # k3s' built-in ingress controller
+  annotations: {}
+  hosts:
+    app: vigil.localhost              # the UI (+ /api via the frontend's nginx)
+    demo: demo.localhost              # the demo shop (only when demoShop.enabled)
+  tls: []                             # e.g. [{secretName: vigil-tls, hosts: [vigil.example.com]}]
+
+# ---------------------------------------------------------------- network policies
+networkPolicies:
+  enabled: true
+  # Namespaces whose pods may reach the services below (matched by the standard
+  # kubernetes.io/metadata.name label).
+  ingressControllerNamespace: kube-system   # Traefik
+  kedaNamespace: keda                       # KEDA reads the Redis list length
+
+# ---------------------------------------------------------------- helm test
+tests:
+  image:
+    registry: ""
+    repository: curlimages/curl
+    tag: 8.22.0
+    pullPolicy: IfNotPresent

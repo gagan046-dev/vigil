@@ -1,0 +1,66 @@
+{{- /*
+vigil-frontend: the "night-watch logbook" web UI. nginx (unprivileged, port 8080)
+serves the static files and forwards /api/* to the vigil-api Service.
+nginx looks up "vigil-api" once at start-up; if the api Service is missing then, nginx
+exits and Kubernetes simply restarts it until the Service exists.
+*/ -}}
+{{- $sel := include "vigil.selectorLabels" (dict "root" . "component" "frontend") }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: vigil-frontend
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vigil.labels" (dict "root" . "component" "frontend") | nindent 4 }}
+spec:
+  selector:
+    {{- $sel | nindent 4 }}
+  ports:
+    - {name: http, port: 8080, targetPort: http}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vigil-frontend
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vigil.labels" (dict "root" . "component" "frontend") | nindent 4 }}
+spec:
+  replicas: {{ .Values.frontend.replicas }}
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxUnavailable: 0, maxSurge: 1}
+  selector:
+    matchLabels:
+      {{- $sel | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "vigil.labels" (dict "root" . "component" "frontend") | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      {{- include "vigil.imagePullSecrets" . | nindent 6 }}
+      securityContext:                          # uid 101 = "nginx" of nginx-unprivileged
+        {{- include "vigil.podSecurity" (dict "uid" 101) | nindent 8 }}
+      containers:
+        - name: frontend
+          image: {{ include "vigil.image" (dict "root" . "image" .Values.frontend.image) }}
+          imagePullPolicy: {{ .Values.frontend.image.pullPolicy }}
+          ports:
+            - {name: http, containerPort: 8080} # unprivileged port (no root needed)
+          securityContext:
+            {{- include "vigil.containerSecurity" dict | nindent 12 }}
+          resources:
+            {{- toYaml .Values.frontend.resources | nindent 12 }}
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 15
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 5
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}      # nginx pid file + temp folders
+      volumes:
+        - name: tmp
+          emptyDir: {}

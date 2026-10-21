@@ -1,0 +1,115 @@
+{{- /*
+vigil-llm-gateway (llmGateway.enabled, production): LiteLLM, an OpenAI-compatible proxy.
+The app always asks for the model alias "vigil-smart"; LiteLLM forwards it to the
+primary model on OpenRouter and, when that fails, to the fallback model.
+
+The OpenRouter key is read with "optional: true", so the gateway starts even before
+the key exists. Until then every LLM call fails and Vigil uses its deterministic paths.
+*/ -}}
+{{- if .Values.llmGateway.enabled }}
+{{- $sel := include "vigil.selectorLabels" (dict "root" . "component" "llm-gateway") }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vigil-llm-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vigil.labels" (dict "root" . "component" "llm-gateway") | nindent 4 }}
+data:
+  config.yaml: |
+    # LiteLLM proxy config. "os.environ/X" = read the value from env var X at runtime.
+    model_list:
+      - model_name: {{ .Values.config.llmModel }}
+        litellm_params:
+          model: {{ .Values.llmGateway.primaryModel }}
+          api_key: os.environ/OPENROUTER_API_KEY
+      - model_name: {{ .Values.config.llmModel }}-fallback
+        litellm_params:
+          model: {{ .Values.llmGateway.fallbackModel }}
+          api_key: os.environ/OPENROUTER_API_KEY
+    litellm_settings:
+      drop_params: true                     # ignore request options a model does not support
+      fallbacks: [{"{{ .Values.config.llmModel }}": ["{{ .Values.config.llmModel }}-fallback"]}]
+      num_retries: 1
+      request_timeout: 50                   # below the app's 60 s client timeout
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vigil-llm-gateway                       # LLM_BASE_URL = http://vigil-llm-gateway:4000/v1
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vigil.labels" (dict "root" . "component" "llm-gateway") | nindent 4 }}
+spec:
+  selector:
+    {{- $sel | nindent 4 }}
+  ports:
+    - {name: http, port: 4000, targetPort: http}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vigil-llm-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vigil.labels" (dict "root" . "component" "llm-gateway") | nindent 4 }}
+spec:
+  replicas: {{ .Values.llmGateway.replicas }}
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      {{- $sel | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "vigil.labels" (dict "root" . "component" "llm-gateway") | nindent 8 }}
+      annotations:
+        # restart the gateway when its model routing changes
+        checksum/litellm-config: {{ printf "%s|%s|%s" .Values.config.llmModel .Values.llmGateway.primaryModel .Values.llmGateway.fallbackModel | sha256sum }}
+    spec:
+      automountServiceAccountToken: false
+      {{- include "vigil.imagePullSecrets" . | nindent 6 }}
+      # The LiteLLM image defaults to root; it runs fine as an unprivileged user with a
+      # read-only root filesystem (tested with v1.103.2), as "restricted" requires.
+      securityContext:
+        {{- include "vigil.podSecurity" (dict "uid" 10001) | nindent 8 }}
+      containers:
+        - name: litellm
+          image: {{ include "vigil.image" (dict "root" . "image" .Values.llmGateway.image) }}
+          imagePullPolicy: {{ .Values.llmGateway.image.pullPolicy }}
+          args: ["--config", "/etc/litellm/config.yaml", "--port", "4000"]
+          ports:
+            - {name: http, containerPort: 4000}
+          env:
+            - {name: HOME, value: /tmp}
+            - name: OPENROUTER_API_KEY
+              valueFrom:
+                secretKeyRef: {name: {{ .Values.secrets.name }}, key: {{ .Values.llmGateway.apiKeySecretKey }}, optional: true}
+            # Optional master key: when set, callers must send it (the app does, as LLM_API_KEY).
+            - name: LITELLM_MASTER_KEY
+              valueFrom:
+                secretKeyRef: {name: {{ .Values.secrets.name }}, key: {{ .Values.llmGateway.masterKeySecretKey }}, optional: true}
+          securityContext:
+            {{- include "vigil.containerSecurity" dict | nindent 12 }}
+          resources:
+            {{- toYaml .Values.llmGateway.resources | nindent 12 }}
+          startupProbe:                         # LiteLLM takes a while to import on first start
+            httpGet: {path: /health/liveliness, port: http}
+            periodSeconds: 5
+            failureThreshold: 36                # up to 3 minutes
+          livenessProbe:
+            httpGet: {path: /health/liveliness, port: http}
+            periodSeconds: 20
+          readinessProbe:
+            httpGet: {path: /health/readiness, port: http}
+            periodSeconds: 10
+          volumeMounts:
+            - {name: config, mountPath: /etc/litellm, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: config
+          configMap:
+            name: vigil-llm-gateway
+        - name: tmp
+          emptyDir: {}
+{{- end }}
