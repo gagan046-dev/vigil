@@ -8,6 +8,7 @@
 .spacer { flex: 1; }
 
 .toolbar .search { width: 260px; max-width: 100%; }
+.toolbar .select { width: auto; min-width: 150px; max-width: 280px; }
 .toolbar__hint { display: inline-flex; align-items: center; gap: 4px; color: var(--text-3); font-size: var(--fs-sm); white-space: nowrap; }
 
 .value { font-weight: 600; white-space: nowrap; }
@@ -24,6 +25,7 @@
   .only-narrow { display: block !important; }
   .toolbar__hint { display: none; }
   .toolbar .search { width: 100%; flex: 1 1 100%; }
+  .toolbar .select { flex: 1 1 140px; max-width: none; }
   .cell-main, .cell-sub { max-width: 46vw; }
 }
 

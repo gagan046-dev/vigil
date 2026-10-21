@@ -70,9 +70,12 @@ export function historyChart(points, { target = null, height = 240, format = mon
     // x labels: up to 5 evenly spaced dates/times
     const spanH = (t1 - t0) / 3600000;
     const nx = Math.min(5, Math.max(2, Math.floor(iw / 120)));
+    let prevLabel = null;
     for (let i = 0; i < nx; i++) {
       const tt = t0 + ((t1 - t0) * i) / (nx - 1);
       const label = spanH <= 36 ? clock(new Date(tt)).slice(0, 5) : dateOnly(new Date(tt));
+      if (label === prevLabel) continue;   // short spans: don't repeat the same minute/day
+      prevLabel = label;
       g.append(svg("text", { x: x(tt), y: H - 8, "text-anchor": i === 0 ? "start" : i === nx - 1 ? "end" : "middle", class: "chart__tick", text: label }));
     }
     root.append(g);
