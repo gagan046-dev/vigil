@@ -34,6 +34,7 @@ New to these words? Each one has a one-line definition in
 | `postgres` | `17.11-alpine` | Database: watches, checks, notifications | `charts/vigil/values.yaml` (`postgres.image`) |
 | `redis` | `8.2.10-alpine` | Job queue, dry-run replies, LLM budget, politeness slots | `charts/vigil/values.yaml` (`redis.image`) |
 | `curlimages/curl` | `8.22.0` | CronJob trigger pods and the `helm test` pod | `values.yaml` (`trigger.image`, `tests.image`) |
+| `searxng/searxng` | `2026.10.4-d48c4b555` | Self-hosted metasearch for Compare (prod only; JSON API) | `values.yaml` (`searxng.image`) |
 | `ghcr.io/berriai/litellm` | `v1.103.2` | LLM gateway in prod (OpenRouter, fallback model) | `values.yaml` (`llmGateway.image`) |
 | `ghcr.io/gagan046-dev/vigil-core` / `-worker` / `-frontend` | `sha-<7 hex>` (CI) or `:dev` (local) | Vigil's own images | `values-dev-images.yaml`, `values-prod-images.yaml` |
 
@@ -52,7 +53,7 @@ New to these words? Each one has a one-line definition in
 | beautifulsoup4 | 4.15.0 | HTML parsing, price/text extraction, CSS selectors |
 | prometheus-client | 0.26.0 | `/metrics` on api (8000), worker (9100), notifier (9101) |
 | playwright | 1.63.0 | Headless Chromium for JavaScript-rendered pages (worker only) |
-| pytest | 9.1.1 | Test runner (190 tests) - dev only |
+| pytest | 9.1.1 | Test runner (247 tests) - dev only |
 | fakeredis | 2.39.0 | In-memory Redis for tests - dev only |
 | respx | 0.23.1 | Mocks httpx calls in tests - dev only |
 | ruff | 0.16.10 | Linter + formatter - dev only |
@@ -80,14 +81,30 @@ New to these words? Each one has a one-line definition in
 | Fallback model | `openrouter/google/gemma-4-31b-it:free` | `values.yaml` `llmGateway.fallbackModel` |
 | Daily budget | 40 calls (counter in Redis) | `values.yaml` `config.llmDailyBudget` |
 
+### Price compare (web search, prod; offline demo in dev)
+
+| Piece | Value | Defined in |
+|---|---|---|
+| Search provider | `demo` in dev (fictional demo-shop sellers, offline), `searxng` in prod | `values.yaml` `config.searchProvider` |
+| SearXNG | image `searxng/searxng:2026.10.4-d48c4b555`, Service `vigil-searxng:8080`, user 977, read-only root filesystem | `templates/searxng.yaml`, `values.yaml` `searxng` |
+| SearXNG settings | JSON output on, limiter and image proxy off | `vigil.searxngSettings` in `templates/searxng.yaml` |
+| SearXNG secret key | key `searxng-secret` of `vigil-secrets` (SealedSecret in prod) | `searxng.secretKey`, `gitops/envs/prod/vigil-secrets.sealed.yaml` |
+| Seller allow-list | `flipkart.com, amazon.in, myntra.com, croma.com, reliancedigital.in, vijaysales.com, tatacliq.com, ajio.com` | `config.compareSellers` |
+| Page budget | 8 seller pages per comparison (1 to 20) | `config.compareMaxPages` |
+| Price sources, in order | JSON-LD, meta tags, price heuristics, LLM (max 3 calls) | `app/vigil/offers.py`, `compare.py` |
+| Match thresholds | accept 0.75, review 0.5 | `app/vigil/matching.py` |
+| Network rules | `allow-searxng` (only the worker, TCP 8080) and a worker egress rule | `templates/networkpolicies.yaml` |
+
+Dev has `searxng.enabled: false` (saves about 200 MB of RAM); prod has it on.
+
 ## Tech stack by folder
 
 | Folder | What is in it | Tools / languages | Phase |
 |---|---|---|---|
-| `app/vigil/` | api, worker, notifier, planner, scheduler, extract, evaluate, llm, demo shop, migrate | Python 3.12, FastAPI, Playwright, BeautifulSoup, psycopg, redis, kubernetes client | 1 |
-| `app/tests/` | 14 test files, 190 tests | pytest, fakeredis, respx | 1 |
+| `app/vigil/` | api, worker, notifier, planner, scheduler, extract, evaluate, llm, demo shop, migrate; price compare: `compare`, `search`, `offers`, `matching` | Python 3.12, FastAPI, Playwright, BeautifulSoup, psycopg, redis, kubernetes client | 1 |
+| `app/tests/` | 16 test files, 247 tests | pytest, fakeredis, respx | 1 |
 | `app/Dockerfile*` | `vigil-core` (multi-stage) and `vigil-worker` images, non-root users 10001 / 1001 | Docker | 1 |
-| `frontend/` | Static UI (HTML/JS/CSS) + nginx config proxying `/api/` to `vigil-api` | nginx-unprivileged | 1 |
+| `frontend/` | Static UI: hash router, ES modules, CSS design tokens (light/dark), no framework or build step; nginx config proxying `/api/` to `vigil-api`, strict CSP; `dev/mock-server.py` for UI work | HTML, CSS, JavaScript, nginx-unprivileged | 1 |
 | `cluster/` | `k3d-config.yaml`: nodes, k3s version, ports 8081 and 6550 | k3d, k3s | 1 |
 | `k8s/` | Raw manifests `00-namespace` ... `40-networkpolicies`, applied in order | Kubernetes YAML, kubectl | 1 |
 | `scripts/` | `import-images`, `create-dev-secret`, `phase1-up`, `phase2-up`, `phase3-up`, `demo` | PowerShell 5.1, curl.exe | 1-3 |
@@ -188,7 +205,7 @@ the Helm version of the same thing in `charts/vigil/templates/`.
 | ServiceAccount + Role + RoleBinding (RBAC) | `k8s/20-api.yaml`, `templates/api.yaml` | api may only manage CronJobs in its namespace |
 | CronJob + Job created at runtime | `app/vigil/scheduler.py` (`build_cronjob`) | `spec.timeZone: Asia/Kolkata`, label `vigil.dev/errand-id` |
 | Ingress (host-based routing) | `k8s/30-ingress.yaml`, `templates/ingress.yaml` | Traefik, `*.localhost` |
-| NetworkPolicy: default deny + allow rules + egress | `k8s/40-networkpolicies.yaml`, `templates/networkpolicies.yaml` | `default-deny-ingress`, `worker-egress` blocks private CIDRs |
+| NetworkPolicy: default deny + allow rules + egress | `k8s/40-networkpolicies.yaml`, `templates/networkpolicies.yaml` | `default-deny-ingress`, `worker-egress` blocks private CIDRs; `allow-searxng` (only the worker may reach SearXNG) plus a worker egress rule to it |
 | Custom Resource (CRD) usage | `ScaledObject` (KEDA), `Application` (Argo CD), `SealedSecret` | |
 | Event-driven autoscaling / scale to zero | `templates/worker.yaml` (ScaledObject) | Redis list `vigil:checks`, min 0 (dev) / 1 (prod), max 5 |
 | Image import into nodes | `scripts/import-images.ps1` | `docker save` -> `ctr images import` |

@@ -390,4 +390,4 @@ kubectl get applications -n argocd
 
 ---
 
-Previous: [Chapter 7 - How Vigil works](07-how-vigil-works.md) | [Glossary](GLOSSARY.md) | [Start here](00-start-here.md)
+Previous: [Chapter 7 - How Vigil works](07-how-vigil-works.md) | Next: [Chapter 9 - Price compare](09-price-compare.md) | [Glossary](GLOSSARY.md) | [Start here](00-start-here.md)

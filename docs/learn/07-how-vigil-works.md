@@ -605,6 +605,16 @@ Admin API used by `scripts/demo.ps1`: `POST /admin/reset`, `POST /admin/price {"
 
 ---
 
+## 7.12b Price compare (pointer)
+
+Besides single-page watches, Vigil can search several shops for one product, check that each
+listing is the same product, and rank the prices. That is a pipeline of its own (search,
+polite fetch, JSON-LD extraction, matching) plus a new `vigil-searxng` pod in prod: see
+[Chapter 9 - Price compare](09-price-compare.md). The UI that shows it is in
+[Chapter 10 - The frontend](10-frontend.md).
+
+---
+
 ## 7.13 Where things live (code map)
 
 | Concept | File | Look for |
@@ -700,4 +710,4 @@ cd app && pip install -r requirements-dev.txt && pytest
 
 ---
 
-Previous: [Chapter 6 - CI to GitOps](06-phase4-ci-to-gitops.md) | Next: [Chapter 8 - Troubleshooting](08-troubleshooting.md) | [Start here](00-start-here.md)
+Previous: [Chapter 6 - CI to GitOps](06-phase4-ci-to-gitops.md) | Next: [Chapter 8 - Troubleshooting](08-troubleshooting.md) | See also [Chapter 9 - Price compare](09-price-compare.md) | [Start here](00-start-here.md)

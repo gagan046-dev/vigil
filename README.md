@@ -26,8 +26,21 @@ Argo CD (GitOps) and CI/CD from zero, on one Windows PC. Everything runs locally
 - **Plain-English planning** - `POST /api/plan` turns a sentence into a watch spec
   (URL, kind, threshold, interval). A rule-based parser handles common phrasings; the
   LLM is only asked when the rules had to guess ("attention routing").
-- **Five watch kinds** - `price_below`, `price_above`, `text_appears`, `text_disappears`,
-  `page_changed`.
+- **Six watch kinds** - `price_below`, `price_above`, `text_appears`, `text_disappears`,
+  `page_changed`, and `best_price_below` (re-runs a price comparison on a schedule).
+- **Price compare** - type a product name or paste a product link on the **Compare** page.
+  Vigil searches the web (a self-hosted [SearXNG](https://github.com/searxng/searxng) pod in
+  prod), fetches the allow-listed sellers (Flipkart, Amazon.in, Myntra, Croma, Reliance
+  Digital, Vijay Sales, Tata CLiQ, AJIO by default), reads each price (JSON-LD, then meta
+  tags, then page heuristics, an LLM only as a last resort), rejects listings that are a
+  different model, variant or accessory, and ranks the rest. **Track best price** turns a
+  comparison into a watch that alerts you when the best price falls below your target.
+  Sellers that block bots show up as such (`blocked by robots.txt`, `bot protection`): Vigil
+  never bypasses CAPTCHAs, logins or robots.txt. Chapter 9 explains it all.
+- **A practical UI** - sidebar with Watches, Compare, Inbox (own page, unread badge),
+  Activity and System; server-side paging with page numbers on every long list; light and
+  dark themes; keyboard and screen-reader friendly. Plain HTML, CSS and ES modules, no
+  framework or build step, under a strict Content-Security-Policy (chapter 10).
 - **Dry run before you commit** - `POST /api/dryrun` makes a worker fetch the page right
   now and show what it found (value, CSS selector, whether the condition is true).
 - **One CronJob per watch** - the api creates a real Kubernetes CronJob
@@ -67,6 +80,7 @@ flowchart LR
             pg[("vigil-postgres<br/>StatefulSet + PVC")]
             gw["vigil-llm-gateway<br/>LiteLLM (prod)"]
             shop["vigil-demo-shop<br/>(dev)"]
+            sx["vigil-searxng<br/>web search (prod)"]
         end
         keda["KEDA<br/>(namespace keda)"]
     end
@@ -82,6 +96,8 @@ flowchart LR
     redis -->|"BLPOP"| worker
     worker --> web
     worker --> shop
+    worker -->|"search (Compare)"| sx
+    sx --> web
     worker -->|"check results"| pg
     worker -->|"notification"| redis
     redis --> notifier
@@ -125,6 +141,8 @@ files line by line, and ends with "Try it yourself", "Common mistakes" and "Key 
 | 06 | [Phase 4: CI/CD with GitHub Actions, from push to GitOps](docs/learn/06-phase4-ci-to-gitops.md) |
 | 07 | [How Vigil works inside: the life of a watch](docs/learn/07-how-vigil-works.md) |
 | 08 | [Troubleshooting: what broke and how it was fixed](docs/learn/08-troubleshooting.md) |
+| 09 | [Price compare: search engines, SearXNG, JSON-LD, matching, tracking the best price](docs/learn/09-price-compare.md) |
+| 10 | [The frontend: router, API client, paging, themes, accessibility, CSP](docs/learn/10-frontend.md) |
 | - | [Glossary (80+ terms)](docs/learn/GLOSSARY.md) |
 
 Also at the repo root:
@@ -185,7 +203,7 @@ Want to learn step by step instead? Start at Phase 1 with raw YAML
 ## Repository layout
 
 ```text
-app/            Python package "vigil" (api, worker, notifier, planner, demo shop) + 190 tests
+app/            Python package "vigil" (api, worker, notifier, planner, demo shop) + 247 tests
 frontend/       static UI served by unprivileged nginx, proxies /api to vigil-api
 cluster/        k3d cluster definition
 k8s/            Phase 1: raw Kubernetes manifests, applied in numeric order
@@ -216,4 +234,8 @@ docs/           learning chapters and verification notes
 - Argo CD polls git every 60 s (no webhook - the cluster is not reachable from the internet).
 - The cluster's DNS needs a small fix for `ghcr.io` (Docker Desktop's DNS times out on
   AAAA queries); `scripts\phase3-up.ps1` applies it. Re-run it after recreating the nodes.
+- Compare depends on what shops publish: many big retailers block automated visitors or
+  show prices only after a JavaScript step, so some rows will honestly say "bot protection"
+  or "no price found". Real SearXNG search has been run only in Docker so far; dev uses
+  fictional demo sellers (see `docs/notes/compare-verification.md`).
 - Free LLM models can be slow or rate-limited; Vigil falls back to its rules when they fail.

@@ -6,7 +6,7 @@ at the real thing.
 
 Jump to: [A](#a) · [B](#b) · [C](#c) · [D](#d) · [E](#e) · [F](#f) · [G](#g) · [H](#h) ·
 [I](#i) · [J](#j) · [K](#k) · [L](#l) · [M](#m) · [N](#n) · [O](#o) · [P](#p) · [R](#r) ·
-[S](#s) · [T](#t) · [U](#u) · [V](#v) · [W](#w) · [Y](#y)
+[S](#s) · [T](#t) · [U](#u) · [V](#v) · [W](#w) · [X](#x) · [Y](#y)
 
 ## A
 
@@ -27,32 +27,35 @@ Jump to: [A](#a) · [B](#b) · [C](#c) · [D](#d) · [E](#e) · [F](#f) · [G](#
 
 | Term | Beginner definition | Where in Vigil |
 |---|---|---|
-| **Baseline** | The first value a watch records; later checks are compared against it. | `/api/log` shows `baseline 134990` for the demo watch |
 | **base64** | A way to write bytes as plain text. Kubernetes stores Secret values in base64 - it is encoding, **not** encryption. | `kubectl get secret ... -o jsonpath="{.data.password}"` must be decoded |
+| **Baseline** | The first value a watch records; later checks are compared against it. | `/api/log` shows `baseline 134990` for the demo watch |
+| **best_price_below** | The watch kind that re-runs a whole price comparison on a schedule and alerts when the best price drops under your target. | `ErrandSpec.kind` in `app/vigil/models.py`; created by `POST /api/compare/<id>/track` (chapter 9) |
 | **BLPOP** | A Redis command: take the first item of a list, waiting until one arrives. | The worker pops jobs from `vigil:checks` (`app/vigil/queue.py`) |
 | **Bootstrap** | The one manual first step that lets automation take over. | `gitops/bootstrap/`: install Argo CD with Helm, apply `root-app.yaml` |
+| **Bot wall** | A CAPTCHA or "access denied" page a shop shows to automated visitors. Vigil reports it and never bypasses it. | `looks_like_bot_wall` in `app/vigil/offers.py`; row text `bot protection (CAPTCHA page)` |
 
 ## C
 
 | Term | Beginner definition | Where in Vigil |
 |---|---|---|
 | **Capabilities (Linux)** | Fine-grained root powers a process can have; dropping them all makes a container much safer. | `capabilities: drop: ["ALL"]` in `vigil.containerSecurity` (`_helpers.tpl`) |
+| **CD (Continuous Delivery/Deployment)** | Automatically getting a tested build into an environment. | Job `bump-dev` + Argo CD (dev); `promote.yaml` PR (prod) |
 | **Chart (Helm)** | A folder of templates plus default values that Helm turns into Kubernetes YAML. | `charts/vigil/` |
 | **Chart.yaml** | The chart's identity card: name, chart version, app version, minimum Kubernetes version. | `charts/vigil/Chart.yaml` |
 | **Checksum annotation** | A hash of the config put on the pod template, so a config change changes the pod and triggers a restart. | `vigil.configChecksums` in `_helpers.tpl`; demonstrated with `helm upgrade --set config.hostMinGapMs=4000` |
 | **CI (Continuous Integration)** | Automatically linting, testing and building every push. | `.github/workflows/ci.yaml` jobs `lint-test` and `helm` |
-| **CD (Continuous Delivery/Deployment)** | Automatically getting a tested build into an environment. | Job `bump-dev` + Argo CD (dev); `promote.yaml` PR (prod) |
-| **ClusterIP** | The default Service type: a stable virtual IP reachable only inside the cluster. | `type: ClusterIP` in `templates/api.yaml` |
 | **Cluster** | A group of machines (nodes) run together by Kubernetes as one big computer. | k3d cluster `vigil` (`cluster/k3d-config.yaml`) |
+| **ClusterIP** | The default Service type: a stable virtual IP reachable only inside the cluster. | `type: ClusterIP` in `templates/api.yaml` |
 | **ConfigMap** | A Kubernetes object holding non-secret settings as key/value pairs. | `vigil-config` (`k8s/01-configmap.yaml`, `templates/configmap.yaml`) |
 | **Container** | A packaged process with its own filesystem, made from an image. | Every pod in Vigil runs one or more containers |
 | **containerd / ctr / crictl** | The container runtime inside each k3s node, and its command-line tools. | `scripts/import-images.ps1` runs `ctr images import`; `crictl pull` tests GHCR |
+| **Content-Security-Policy (CSP)** | An HTTP header that tells the browser which sources of scripts, styles, images and connections are allowed on a page. | `frontend/security-headers.conf` (chapter 10) |
 | **Control plane** | The "brain" of the cluster: API server, scheduler, controllers, etcd. | Runs on `k3d-vigil-server-0` |
 | **Controller** | A program that loops forever: compare desired state with actual state, fix the difference. | Deployment controller, KEDA operator, Argo CD application controller, sealed-secrets controller |
 | **Cooldown period** | How long KEDA waits with an empty queue before scaling back to zero. | `cooldownPeriod: 60` in `values.yaml` (`worker.autoscaling`) |
 | **CRD (CustomResourceDefinition)** | Adds a new kind of object to Kubernetes. | `ScaledObject` (KEDA), `Application` (Argo CD), `SealedSecret` |
-| **CronJob** | Runs a Job on a schedule written in cron syntax. | One per watch, created at runtime by the api (`app/vigil/scheduler.py`, name `errand-<id>`) |
 | **Cron expression** | Five fields (minute hour day month weekday) describing a schedule. | `*/1 * * * *` (every minute), `*/5 * * * *` |
+| **CronJob** | Runs a Job on a schedule written in cron syntax. | One per watch, created at runtime by the api (`app/vigil/scheduler.py`, name `errand-<id>`) |
 
 ## D
 
@@ -60,6 +63,7 @@ Jump to: [A](#a) · [B](#b) · [C](#c) · [D](#d) · [E](#e) · [F](#f) · [G](#
 |---|---|---|
 | **Default deny** | A NetworkPolicy that blocks all incoming traffic unless another policy allows it. | `default-deny-ingress` in `templates/networkpolicies.yaml` |
 | **Deployment** | Keeps N identical pods running and replaces them gradually on updates. | `vigil-api`, `vigil-worker`, `vigil-notifier`, `vigil-frontend`, `vigil-demo-shop` |
+| **Design token** | A named CSS value (colour, size) defined once as a custom property and reused everywhere. | `frontend/css/tokens.css` (`--accent`, `--surface`, ...) |
 | **Desired state** | What you declared you want (in YAML / git); Kubernetes works to make reality match it. | Everything in `k8s/`, `charts/`, `gitops/` |
 | **Dockerfile** | The recipe for building a container image. | `app/Dockerfile`, `app/Dockerfile.worker`, `frontend/Dockerfile` |
 | **Drift** | When the live cluster differs from git. Argo CD shows it as OutOfSync. | Self-heal demo: `kubectl scale ... --replicas=5` was drift |
@@ -74,6 +78,7 @@ Jump to: [A](#a) · [B](#b) · [C](#c) · [D](#d) · [E](#e) · [F](#f) · [G](#
 | **Endpoint** | An address (pod IP + port) behind a Service. | `kubectl get endpoints vigil-api -n vigil-dev` |
 | **envFrom** | Load every key of a ConfigMap or Secret as environment variables. | `envFrom: configMapRef: vigil-config` in every Vigil pod |
 | **Errand** | Vigil's internal name for a watch (a standing order to check a page). | Table/API `/api/errands`, CronJob `errand-<id>` |
+| **ES module** | A JavaScript file that uses `import`/`export`; the browser loads it directly with `type="module"`. | `frontend/js/*.js`, loaded from `index.html` |
 | **etcd** | The key-value database where Kubernetes stores all objects. | Inside the k3s server (k3s uses an embedded datastore) |
 | **Events** | Short messages Kubernetes records about what happened to objects (scheduled, pulled, failed). | `kubectl get events -n vigil-dev --sort-by=.lastTimestamp` |
 
@@ -97,6 +102,7 @@ Jump to: [A](#a) · [B](#b) · [C](#c) · [D](#d) · [E](#e) · [F](#f) · [G](#
 
 | Term | Beginner definition | Where in Vigil |
 |---|---|---|
+| **Hash router** | Routing by the part of the URL after `#`, which is never sent to the server. | `ROUTES` in `frontend/js/main.js` |
 | **Health status (Argo CD)** | Whether the deployed objects actually work (Healthy, Progressing, Degraded). | `kubectl get applications -n argocd` column HEALTH STATUS |
 | **Helm** | The package manager for Kubernetes: renders templates with values and tracks releases. | `charts/vigil`, Phase 2, `scripts/phase2-up.ps1` |
 | **Helm hook** | A template annotated to run at a special moment (e.g. `helm test`). | `"helm.sh/hook": test` in `templates/tests/test-api.yaml` |
@@ -126,6 +132,7 @@ Jump to: [A](#a) · [B](#b) · [C](#c) · [D](#d) · [E](#e) · [F](#f) · [G](#
 | Term | Beginner definition | Where in Vigil |
 |---|---|---|
 | **Job** | Runs a pod until it completes successfully (once, not forever). | Each CronJob tick creates a Job whose curl pod triggers a check |
+| **JSON-LD** | Machine-readable data (usually schema.org vocabulary) inside a `<script type="application/ld+json">` tag on a page. | `from_jsonld` in `app/vigil/offers.py`; the demo shop's seller pages (chapter 9) |
 | **jsonpath** | A way to pick one field out of `kubectl` output. | `-o jsonpath="{.data.password}"` |
 
 ## K
@@ -161,7 +168,9 @@ Jump to: [A](#a) · [B](#b) · [C](#c) · [D](#d) · [E](#e) · [F](#f) · [G](#
 | **managedNamespaceMetadata** | Labels/annotations Argo CD puts on a namespace it creates. | Pod Security labels in `gitops/apps/vigil-dev.yaml` and `vigil-prod.yaml` |
 | **Manifest** | A YAML (or JSON) file describing Kubernetes objects. | `k8s/*.yaml` |
 | **Matrix (CI)** | One job definition run several times with different inputs. | `build-push` builds 3 images |
+| **Metasearch engine** | A search service with no index of its own that forwards your query to other engines and merges the answers. | SearXNG (`vigil-searxng`, chapter 9) |
 | **metrics-server** | Collects CPU/RAM usage for `kubectl top` and the HPA. | Bundled with k3s |
+| **MRP** | Maximum retail price: the printed list price, used to show "13% off". | `mrp` and `discount_pct` in compare rows (`app/vigil/compare.py`) |
 | **Multi-source Application** | An Argo CD Application built from several git paths at once. | `gitops/apps/vigil-prod.yaml` (`sources:` chart + SealedSecret) |
 
 ## N
@@ -187,6 +196,7 @@ Jump to: [A](#a) · [B](#b) · [C](#c) · [D](#d) · [E](#e) · [F](#f) · [G](#
 
 | Term | Beginner definition | Where in Vigil |
 |---|---|---|
+| **Pagination contract** | The fixed list-answer shape `{items, total, page, per_page, pages}` used by every list endpoint. | `paged()` in `app/vigil/api.py`; `toPage()` and `pager()` in `frontend/js` (chapter 10) |
 | **Playwright** | A library that drives a real headless browser (Chromium) from code. | `vigil-worker` image, renders JavaScript-heavy pages |
 | **Pod** | The smallest thing Kubernetes runs: one or more containers sharing network and volumes. | `kubectl get pods -n vigil-dev` |
 | **Pod Security Standards (PSS)** | Built-in profiles (`privileged`, `baseline`, `restricted`) enforced by namespace labels. | `pod-security.kubernetes.io/enforce: restricted` on every Vigil namespace |
@@ -219,15 +229,20 @@ Jump to: [A](#a) · [B](#b) · [C](#c) · [D](#d) · [E](#e) · [F](#f) · [G](#
 
 | Term | Beginner definition | Where in Vigil |
 |---|---|---|
-| **ScaledObject** | KEDA's object: "scale this Deployment on this trigger between min and max". | `templates/worker.yaml` (Redis list `vigil:checks`) |
 | **Scale to zero** | Running no pods at all when there is no work. | Dev worker `minReplicas: 0` (`values-dev.yaml`) |
+| **ScaledObject** | KEDA's object: "scale this Deployment on this trigger between min and max". | `templates/worker.yaml` (Redis list `vigil:checks`) |
 | **Scheduler (Kubernetes)** | Picks a node for each new pod. | Part of the k3s control plane |
+| **schema.org** | A shared vocabulary (`Product`, `Offer`, `InStock`, ...) that shops use to describe pages for machines. | `app/vigil/offers.py` (chapter 9) |
 | **SealedSecret** | An encrypted Secret that is safe to commit; only the in-cluster controller can decrypt it. | `gitops/envs/prod/vigil-secrets.sealed.yaml` |
+| **Search provider** | The code that finds product pages for a query: `demo` (offline) or `searxng` (real web). | `SEARCH_PROVIDER`, `make_search` in `app/vigil/search.py` |
+| **SearXNG** | A self-hosted open-source metasearch engine with a JSON API; Vigil's real web search in prod. | `charts/vigil/templates/searxng.yaml`, image `searxng/searxng:2026.10.4-d48c4b555` |
+| **searxng-secret** | The key of the `vigil-secrets` Secret that becomes SearXNG's `SEARXNG_SECRET`. | `gitops/envs/prod/vigil-secrets.sealed.yaml` (sealed), `secrets.searxngSecret` in dev |
 | **Secret** | A Kubernetes object for sensitive values (passwords, tokens). | `vigil-secrets` (keys `postgres-password`, `internal-token`, ...) |
 | **secretKeyRef** | Read one key of a Secret into an environment variable; `optional: true` lets the pod start without it. | `LLM_API_KEY`, `TELEGRAM_BOT_TOKEN` (`_helpers.tpl`, `notifier.yaml`) |
 | **securityContext** | Pod/container settings for user ID, privileges and filesystem access. | `vigil.podSecurity`, `vigil.containerSecurity` in `_helpers.tpl` |
 | **Selector** | A label query that picks objects (a Service's pods, a Deployment's pods). | `vigil.selectorLabels` in `_helpers.tpl` |
 | **Self-heal** | Argo CD reverts manual changes in the cluster back to git. | `selfHeal: true`; demo: replicas 5 -> 2 in ~5 s |
+| **Seller allow-list** | The domains whose search results Compare keeps; everything else is ignored. | `COMPARE_SELLERS`, `DEFAULT_COMPARE_SELLERS` in `app/vigil/config.py` |
 | **Server (k3d/k3s)** | The node that runs the control plane. | `servers: 1` -> `k3d-vigil-server-0` |
 | **Server-side apply** | The API server merges the YAML itself; needed for very large objects like CRDs. | `ServerSideApply=true` in `gitops/apps/keda.yaml` |
 | **Service** | A stable name + virtual IP that load-balances to matching pods. | `vigil-api:8000`, `vigil-redis:6379`, `vigil-postgres:5432` |
@@ -245,6 +260,7 @@ Jump to: [A](#a) · [B](#b) · [C](#c) · [D](#d) · [E](#e) · [F](#f) · [G](#
 |---|---|---|
 | **Template (Helm)** | A YAML file with `{{ }}` placeholders that Helm fills from values. | `charts/vigil/templates/*.yaml` |
 | **terminationGracePeriodSeconds** | How long a pod gets to finish work after being asked to stop. | 90 s for the worker |
+| **textContent** | A DOM property that sets plain text; the browser never parses it as HTML, so it cannot inject markup. | `frontend/js/dom.js` (chapter 10) |
 | **timeZone (CronJob)** | The time zone a CronJob schedule is read in. | `Asia/Kolkata` (`config.scheduleTimezone`) |
 | **topologySpreadConstraints** | Ask the scheduler to spread replicas across nodes. | `templates/api.yaml` |
 | **Traefik** | The reverse proxy/ingress controller built into k3s. | `ingress.className: traefik` |
@@ -271,6 +287,12 @@ Jump to: [A](#a) · [B](#b) · [C](#c) · [D](#d) · [E](#e) · [F](#f) · [G](#
 | **Webhook** | An HTTP call one system makes to another when something happens. | Not used: Argo CD polls GitHub because the cluster is not reachable from the internet |
 | **Worker** | The process that takes jobs from a queue and does the work. | `vigil-worker` (`app/vigil/worker.py`) |
 | **workflow_dispatch** | A GitHub Actions trigger to start a workflow by hand. | `promote.yaml` (`gh workflow run promote.yaml`) |
+
+## X
+
+| Term | Beginner definition | Where in Vigil |
+|---|---|---|
+| **XSS (cross-site scripting)** | An attack where injected script runs inside your page; blocked by `textContent` and the CSP. | `frontend/js/dom.js`, `frontend/security-headers.conf` |
 
 ## Y
 

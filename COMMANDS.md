@@ -27,7 +27,7 @@ export PATH="$PATH:/c/Users/gagan/AppData/Local/Microsoft/WinGet/Packages/k3d.k3
 4. [Phase 2: Helm](#4-phase-2-helm)
 5. [Phase 3: Argo CD](#5-phase-3-argo-cd)
 6. [Phase 4: CI/CD](#6-phase-4-cicd)
-7. [Using Vigil and the demo shop](#7-using-vigil-and-the-demo-shop)
+7. [Using Vigil, the demo shop, price compare and SearXNG](#7-using-vigil-and-the-demo-shop)
 8. [Debugging](#8-debugging)
 9. [Watching KEDA scale](#9-watching-keda-scale)
 10. [Cleanup and freeing RAM](#10-cleanup-and-freeing-ram)
@@ -281,6 +281,22 @@ ruff check . && ruff format --check . && pytest
 A pull request opened by the promote workflow shows CI as `action_required` until a
 human clicks **Approve and run workflows** on the PR page.
 
+Promoting a release that contains new features (for example Compare) to prod:
+
+```bash
+gh workflow run promote.yaml                    # opens "promote sha-xxxxxxx to prod"
+gh pr list                                      # find the number; its diff must only touch values-prod-images.yaml
+gh pr view <number> --web                       # review it, approve CI, then merge
+gh pr merge <number> --squash                   # merging IS the deployment to prod
+# Argo CD syncs vigil-prod within about a minute:
+kubectl get deploy -n vigil-prod -o wide        # all images show the new sha- tag
+gh pr close <older-number>                      # close older promotion PRs that are now out of date
+```
+
+`vigil-prod` reads the chart from `main` but its image tags from the merged PR. So chart
+changes (like the SearXNG pod) are live in prod as soon as they are on `main`, while the
+new application code only arrives with the merge.
+
 ## 7. Using Vigil and the demo shop
 
 Dev: `http://vigil-dev.localhost:8081` · Shop: `http://demo.localhost:8081` · Shop admin:
@@ -303,7 +319,10 @@ curl.exe -s -X POST -H "Content-Type: application/json" -d '{\"value\":114990}' 
 # Watches, logbook, inbox
 curl.exe -s http://vigil-dev.localhost:8081/api/errands
 curl.exe -s "http://vigil-dev.localhost:8081/api/log"
-curl.exe -s "http://vigil-dev.localhost:8081/api/inbox?limit=10"
+curl.exe -s "http://vigil-dev.localhost:8081/api/inbox?page=1&per_page=10"       # lists are paged: {items,total,page,per_page,pages}
+curl.exe -s "http://vigil-dev.localhost:8081/api/log?page=2&per_page=50&status=error"
+curl.exe -s http://vigil-dev.localhost:8081/api/inbox/unread-count
+curl.exe -s -X POST http://vigil-dev.localhost:8081/api/inbox/read-all
 
 # The CronJobs the api created (one per watch) and the Jobs they started
 kubectl get cronjobs -n vigil-dev -l app.kubernetes.io/managed-by=vigil-api
@@ -317,6 +336,55 @@ Sending text with the rupee sign: write the JSON into a UTF-8 file and send it w
 printf '%s' '{"text":"Tell me when http://vigil-demo-shop:8000/static drops below ₹1,20,000, check every minute"}' > plan.json
 curl -sS -X POST -H 'Content-Type: application/json' --data-binary @plan.json http://vigil-dev.localhost:8081/api/plan
 rm plan.json
+```
+
+### Price compare and SearXNG
+
+Dev uses the offline demo provider (fictional sellers; only "Aurora 15" finds anything).
+Prod uses SearXNG and the real shops. Write JSON with `₹` or other non-ASCII text into a
+UTF-8 file, as above.
+
+```bash
+# Start a comparison (202 + a run id), then read it; status goes queued -> searching -> fetching -> done
+printf '%s' '{"query":"Aurora 15"}' > cmp.json
+curl -sS -X POST -H 'Content-Type: application/json' --data-binary @cmp.json http://vigil-dev.localhost:8081/api/compare
+curl -s http://vigil-dev.localhost:8081/api/compare/<run-id>
+curl -s "http://vigil-dev.localhost:8081/api/compare?page=1&per_page=10"      # past comparisons
+rm cmp.json
+
+# Keep watching the best price: target in rupees, check every 60 minutes (the default)
+printf '%s' '{"threshold":120000,"every_minutes":60}' > track.json
+curl -sS -X POST -H 'Content-Type: application/json' --data-binary @track.json http://vigil-dev.localhost:8081/api/compare/<run-id>/track
+rm track.json
+
+# Make one demo seller cheaper, then compare again (sellers: pixelmart bazaar99 northwind bytebay quietcart)
+curl -sS -X POST -H 'Content-Type: application/json' -d '{"price":115000}' http://demo.localhost:8081/admin/sellers/bazaar99
+curl -sS -X POST http://demo.localhost:8081/admin/reset
+
+# Which search provider and sellers are configured?
+curl -s http://vigil-dev.localhost:8081/api/system
+```
+
+```bash
+# Prod only: the SearXNG pod, its Service and who may talk to it
+kubectl get deploy,svc,pod -n vigil-prod -l app.kubernetes.io/component=searxng
+kubectl logs -n vigil-prod deploy/vigil-searxng --tail=30
+kubectl get networkpolicy -n vigil-prod                                     # look for allow-searxng
+kubectl get configmap vigil-config -n vigil-prod -o jsonpath='{.data.SEARCH_PROVIDER}'
+kubectl get secret vigil-secrets -n vigil-prod -o jsonpath='{.data}'        # key NAMES only matter: check searxng-secret exists, never decode it
+
+# Try real search in dev (RAM +~200 MB): in charts/vigil/values-dev.yaml set
+#   config.searchProvider: searxng, searxng.enabled: true, secrets.searxngSecret: <random>
+# commit + push (Argo CD applies it). Never commit a real secret: use a throw-away random value.
+```
+
+Add or rotate the `searxng-secret` key in the prod SealedSecret (the value never touches disk):
+
+```bash
+V=$(openssl rand -hex 32)
+kubectl create secret generic vigil-secrets -n vigil-prod --from-literal=searxng-secret="$V"   --dry-run=client -o yaml | kubeseal --controller-namespace kube-system   --controller-name sealed-secrets-controller --format yaml   --merge-into gitops/envs/prod/vigil-secrets.sealed.yaml
+unset V
+kubectl apply --dry-run=server -f gitops/envs/prod/vigil-secrets.sealed.yaml
 ```
 
 ## 8. Debugging

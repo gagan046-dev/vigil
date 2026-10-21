@@ -191,6 +191,9 @@ git checkout phase-1                      # look around (then: git checkout main
 | 05 | [05-phase3-argocd-gitops.md](05-phase3-argocd-gitops.md) | Phase 3: GitOps with Argo CD, app of apps, Sealed Secrets |
 | 06 | [06-phase4-ci-to-gitops.md](06-phase4-ci-to-gitops.md) | Phase 4: GitHub Actions builds images, bumps dev, promotes prod by PR |
 | 07 | [07-how-vigil-works.md](07-how-vigil-works.md) | Inside the app: planner, worker, extraction, notifications |
+| 08 | [08-troubleshooting.md](08-troubleshooting.md) | What goes wrong and how to read the symptoms |
+| 09 | [09-price-compare.md](09-price-compare.md) | Price compare: search engines and SearXNG, JSON-LD, product matching, polite fetching, tracking the best price, the SearXNG Kubernetes pieces |
+| 10 | [10-frontend.md](10-frontend.md) | The UI: hash router, ES modules, API client, pagination contract, CSS tokens and themes, accessibility, CSP and `textContent` |
 | - | [GLOSSARY.md](GLOSSARY.md) | Every technical word, A to Z |
 
 Every chapter has the same shape:
