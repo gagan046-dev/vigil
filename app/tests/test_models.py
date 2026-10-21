@@ -100,3 +100,21 @@ def test_describe_condition():
     assert describe_condition({"kind": "price_below", "threshold": 120000}) == "price < 1,20,000"
     assert describe_condition({"kind": "text_appears", "keyword": "Slot"}) == '"Slot" appears'
     assert describe_condition({"kind": "page_changed"}) == "page changes"
+
+
+def test_best_price_spec_rules():
+    from vigil.models import ErrandSpec, describe_condition
+
+    s = ErrandSpec(name="Best", kind="best_price_below", query=" Aurora 15 ")
+    assert s.url is None and s.query == "Aurora 15" and s.threshold is None and s.host == ""
+    assert ErrandSpec(name="B", kind="best_price_below", url="https://x.example.com/p").query is None
+    for bad in (
+        {"name": "B", "kind": "best_price_below"},
+        {"name": "B", "kind": "best_price_below", "query": "x", "threshold": -5},
+        {"name": "B", "kind": "best_price_below", "url": "ftp://x/y"},
+        {"name": "B", "kind": "page_changed"},  # other kinds still need a url
+    ):
+        with pytest.raises(ValueError):
+            ErrandSpec(**bad)
+    assert describe_condition({"kind": "best_price_below", "threshold": 125000}) == "best price < 1,25,000"
+    assert describe_condition({"kind": "best_price_below"}) == "best price drops"

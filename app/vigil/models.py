@@ -11,8 +11,9 @@ from .config import min_interval_minutes
 
 ALLOWED_INTERVALS: tuple[int, ...] = (1, 2, 5, 10, 15, 30, 60, 120, 180, 360, 720, 1440)
 
-Kind = Literal["price_below", "price_above", "text_appears", "text_disappears", "page_changed"]
+Kind = Literal["price_below", "price_above", "text_appears", "text_disappears", "page_changed", "best_price_below"]
 PRICE_KINDS = ("price_below", "price_above")
+COMPARE_KINDS = ("best_price_below",)
 TEXT_KINDS = ("text_appears", "text_disappears")
 
 
@@ -45,8 +46,9 @@ class ErrandSpec(BaseModel):
     model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
 
     name: str = Field(min_length=1, max_length=80)
-    url: str = Field(max_length=2000)
+    url: str | None = Field(default=None, max_length=2000)
     kind: Kind
+    query: str | None = Field(default=None, max_length=300)
     threshold: float | None = None
     keyword: str | None = Field(default=None, max_length=120)
     selector: str | None = Field(default=None, max_length=300)
@@ -55,13 +57,15 @@ class ErrandSpec(BaseModel):
 
     @field_validator("url")
     @classmethod
-    def _check_url(cls, v: str) -> str:
+    def _check_url(cls, v: str | None) -> str | None:
+        if not v:
+            return None
         parts = urlsplit(v)
         if parts.scheme not in ("http", "https") or not parts.hostname:
             raise ValueError("url must be an http(s) URL with a host")
         return v
 
-    @field_validator("keyword", "selector")
+    @field_validator("keyword", "selector", "query")
     @classmethod
     def _blank_to_none(cls, v: str | None) -> str | None:
         return v or None
@@ -76,6 +80,13 @@ class ErrandSpec(BaseModel):
 
     @model_validator(mode="after")
     def _check_kind_fields(self) -> ErrandSpec:
+        if self.kind in COMPARE_KINDS:
+            if not (self.query or self.url):
+                raise ValueError("a product name (query) or a product URL is required for best-price watches")
+            if self.threshold is not None and self.threshold <= 0:
+                raise ValueError("threshold must be a positive number")
+        elif not self.url:
+            raise ValueError("url is required")
         if self.kind in PRICE_KINDS:
             if self.threshold is None or self.threshold <= 0:
                 raise ValueError("threshold must be a positive number for price watches")
@@ -88,7 +99,7 @@ class ErrandSpec(BaseModel):
 
     @property
     def host(self) -> str:
-        return (urlsplit(self.url).hostname or "").lower()
+        return (urlsplit(self.url or "").hostname or "").lower()
 
     @property
     def cron(self) -> str:
@@ -104,6 +115,10 @@ def describe_condition(spec: dict) -> str:
         return f"price < {format_number(spec.get('threshold') or 0)}"
     if kind == "price_above":
         return f"price > {format_number(spec.get('threshold') or 0)}"
+    if kind == "best_price_below":
+        if spec.get("threshold"):
+            return f"best price < {format_number(spec['threshold'])}"
+        return "best price drops"
     if kind == "text_appears":
         return f'"{spec.get("keyword")}" appears'
     if kind == "text_disappears":

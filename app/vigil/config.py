@@ -27,6 +27,11 @@ def _csv(name: str, default: str = "") -> tuple[str, ...]:
     return tuple(h.strip().lower() for h in raw.split(",") if h.strip())
 
 
+DEFAULT_COMPARE_SELLERS = (
+    "flipkart.com,amazon.in,myntra.com,croma.com,reliancedigital.in,vijaysales.com,tatacliq.com,ajio.com"
+)
+
+
 def min_interval_minutes() -> int:
     """Smallest schedule allowed (read live so tests/env changes apply)."""
     return max(1, _int("MIN_INTERVAL_MINUTES", 5))
@@ -73,6 +78,12 @@ class Settings:
     ntfy_url: str = ""
     telegram_bot_token: str = field(default="", repr=False)
     telegram_chat_id: str = ""
+    # price comparison
+    search_provider: str = "demo"  # demo | searxng
+    searxng_url: str = "http://vigil-searxng:8080"
+    compare_sellers: tuple[str, ...] = tuple(DEFAULT_COMPARE_SELLERS.split(","))
+    compare_max_pages: int = 8
+    demo_shop_url: str = "http://vigil-demo-shop:8000"
     # metrics
     worker_metrics_port: int = 9100
     notifier_metrics_port: int = 9101
@@ -105,6 +116,11 @@ def load_settings() -> Settings:
         ntfy_url=e("NTFY_URL", "").strip(),
         telegram_bot_token=e("TELEGRAM_BOT_TOKEN", "").strip(),
         telegram_chat_id=e("TELEGRAM_CHAT_ID", "").strip(),
+        search_provider=e("SEARCH_PROVIDER", "demo").strip().lower() or "demo",
+        searxng_url=e("SEARXNG_URL", "http://vigil-searxng:8080").strip().rstrip("/"),
+        compare_sellers=_csv("COMPARE_SELLERS", DEFAULT_COMPARE_SELLERS),
+        compare_max_pages=max(1, min(20, _int("COMPARE_MAX_PAGES", 8))),
+        demo_shop_url=e("DEMO_SHOP_URL", "http://vigil-demo-shop:8000").strip().rstrip("/"),
         worker_metrics_port=_int("WORKER_METRICS_PORT", 9100),
         notifier_metrics_port=_int("NOTIFIER_METRICS_PORT", 9101),
     )

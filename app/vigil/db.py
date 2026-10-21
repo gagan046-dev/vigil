@@ -28,6 +28,14 @@ ERRAND_FIELDS = (
     "selector_learned",
 )
 
+ERRAND_STATUS_SQL = {
+    "active": "e.active AND e.consecutive_failures < 3",
+    "paused": "NOT e.active",
+    "failing": "e.active AND e.consecutive_failures >= 3",
+}
+COMPARE_FIELDS = ("status", "product", "offers", "best", "notes", "finished_at")
+COMPARE_JSON = ("product", "offers", "best", "notes")
+
 
 def _norm(row: dict[str, Any] | None) -> dict[str, Any] | None:
     if row is None:
@@ -152,3 +160,139 @@ class PgStore:
         return (
             self._one("UPDATE notifications SET read = true WHERE id = %s RETURNING id", (notification_id,)) is not None
         )
+
+    # -- pagination (each returns (items, total))
+    def _page(self, select: str, count: str, where: list[str], params: dict, order: str, offset: int, limit: int):
+        clause = (" WHERE " + " AND ".join(where)) if where else ""
+        total = self._one(count + clause, params)["n"]
+        rows = self._all(
+            f"{select}{clause} ORDER BY {order} LIMIT %(limit)s OFFSET %(offset)s",
+            {
+                **params,
+                "limit": limit,
+                "offset": offset,
+            },
+        )
+        return rows, int(total)
+
+    def page_errands(self, offset: int = 0, limit: int = 25, q: str | None = None, status: str | None = None):
+        where: list[str] = []
+        params: dict = {}
+        if q:
+            escaped = q.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
+            params["q"] = f"%{escaped}%"
+            where.append("(e.name ILIKE %(q)s OR e.spec->>'url' ILIKE %(q)s OR e.spec->>'query' ILIKE %(q)s)")
+        if status in ERRAND_STATUS_SQL:
+            where.append(ERRAND_STATUS_SQL[status])
+        return self._page(
+            "SELECT e.*, (SELECT c.value FROM checks c WHERE c.errand_id = e.id AND c.value IS NOT NULL "
+            "AND c.value IS DISTINCT FROM e.last_value ORDER BY c.at DESC LIMIT 1) AS prev_value FROM errands e",
+            "SELECT count(*) AS n FROM errands e",
+            where,
+            params,
+            "e.created_at DESC, e.id",
+            offset,
+            limit,
+        )
+
+    def page_checks(self, errand_id: str, offset: int = 0, limit: int = 25):
+        return self._page(
+            "SELECT * FROM checks c",
+            "SELECT count(*) AS n FROM checks c",
+            ["c.errand_id = %(eid)s"],
+            {"eid": errand_id},
+            "c.at DESC, c.id DESC",
+            offset,
+            limit,
+        )
+
+    def errand_history(self, errand_id: str, days: int = 30) -> list[dict]:
+        return self._all(
+            "SELECT at, value, status FROM checks WHERE errand_id = %s AND at >= now() - make_interval(days => %s) "
+            "ORDER BY at ASC LIMIT 5000",
+            (errand_id, days),
+        )
+
+    def page_log(self, offset: int = 0, limit: int = 25, status: str | None = None, errand_id: str | None = None):
+        where: list[str] = []
+        params: dict = {}
+        if status:
+            where.append("c.status = %(status)s")
+            params["status"] = status
+        if errand_id:
+            where.append("c.errand_id = %(eid)s")
+            params["eid"] = errand_id
+        return self._page(
+            "SELECT c.*, e.name AS errand_name FROM checks c JOIN errands e ON e.id = c.errand_id",
+            "SELECT count(*) AS n FROM checks c",
+            where,
+            params,
+            "c.at DESC, c.id DESC",
+            offset,
+            limit,
+        )
+
+    def page_inbox(self, offset: int = 0, limit: int = 25, unread: bool | None = None):
+        where = [] if unread is None else (["NOT n.read"] if unread else ["n.read"])
+        return self._page(
+            "SELECT n.*, e.name AS errand_name FROM notifications n LEFT JOIN errands e ON e.id = n.errand_id",
+            "SELECT count(*) AS n FROM notifications n",
+            where,
+            {},
+            "n.at DESC, n.id DESC",
+            offset,
+            limit,
+        )
+
+    def unread_count(self) -> int:
+        return int(self._one("SELECT count(*) AS n FROM notifications WHERE NOT read")["n"])
+
+    def mark_all_read(self) -> int:
+        with self.pool.connection(timeout=10) as conn:
+            return conn.execute("UPDATE notifications SET read = true WHERE NOT read").rowcount
+
+    # -- price comparisons
+    def create_compare(self, query: str, errand_id: str | None = None, notes: dict | None = None) -> dict:
+        return self._one(
+            "INSERT INTO compare_runs (query, errand_id, notes) VALUES (%s, %s, %s) RETURNING *",
+            (query[:500], errand_id, Jsonb(notes or {})),
+        )
+
+    def get_compare(self, compare_id: str) -> dict | None:
+        return self._one("SELECT * FROM compare_runs WHERE id = %s", (compare_id,))
+
+    def update_compare(self, compare_id: str, **fields: Any) -> None:
+        cols = [k for k in fields if k in COMPARE_FIELDS]
+        if not cols:
+            return
+        params = {c: (Jsonb(fields[c]) if c in COMPARE_JSON and fields[c] is not None else fields[c]) for c in cols}
+        params["id"] = compare_id
+        sets = ", ".join(f"{c} = %({c})s" for c in cols)
+        with self.pool.connection(timeout=10) as conn:
+            conn.execute(f"UPDATE compare_runs SET {sets} WHERE id = %(id)s", params)  # noqa: S608 (allow-listed)
+
+    def page_compares(self, offset: int = 0, limit: int = 25, errand_id: str | None = None):
+        where, params = (["r.errand_id = %(eid)s"], {"eid": errand_id}) if errand_id else (["r.errand_id IS NULL"], {})
+        return self._page(
+            "SELECT r.id, r.query, r.status, r.product, r.best, r.notes, r.created_at, r.finished_at, r.errand_id, "
+            "jsonb_array_length(r.offers) AS offers_count FROM compare_runs r",
+            "SELECT count(*) AS n FROM compare_runs r",
+            where,
+            params,
+            "r.created_at DESC, r.id",
+            offset,
+            limit,
+        )
+
+    def latest_compare(self, errand_id: str) -> dict | None:
+        return self._one(
+            "SELECT * FROM compare_runs WHERE errand_id = %s ORDER BY created_at DESC LIMIT 1", (errand_id,)
+        )
+
+    def prune_compares(self, errand_id: str, keep: int = 50) -> None:
+        with self.pool.connection(timeout=10) as conn:
+            conn.execute(
+                "DELETE FROM compare_runs WHERE errand_id = %s AND id NOT IN "
+                "(SELECT id FROM compare_runs WHERE errand_id = %s ORDER BY created_at DESC LIMIT %s)",
+                (errand_id, errand_id, keep),
+            )

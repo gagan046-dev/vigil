@@ -67,7 +67,8 @@ def test_create_list_patch_delete(env):
     assert queue.queue_depth(r) == 1  # immediate check
 
     listed = client.get("/api/errands").json()
-    assert [x["id"] for x in listed] == [e["id"]]
+    assert [x["id"] for x in listed["items"]] == [e["id"]] and listed["total"] == 1
+    assert listed["items"][0]["status"] == "active"
 
     paused = client.patch(f"/api/errands/{e['id']}", json={"active": False}).json()
     assert paused["active"] is False and sched.upserts[-1]["active"] is False
@@ -75,7 +76,7 @@ def test_create_list_patch_delete(env):
     assert client.post(f"/api/errands/{e['id']}/check").status_code == 202
     assert client.delete(f"/api/errands/{e['id']}").status_code == 204
     assert sched.deleted == [e["id"]]
-    assert client.get("/api/errands").json() == []
+    assert client.get("/api/errands").json()["items"] == []
 
 
 def test_errand_validation_and_404(env):
@@ -93,14 +94,14 @@ def test_checks_log_inbox(env):
     client, store, *_ = env
     e = client.post("/api/errands", json={"spec": SPEC}).json()
     store.add_check(e["id"], "baseline", 10, 134990.0, False, False, "ok")
-    assert client.get(f"/api/errands/{e['id']}/checks").json()[0]["status"] == "baseline"
-    log = client.get("/api/log?limit=5").json()
-    assert log[0]["errand_name"] == "Aurora"
+    assert client.get(f"/api/errands/{e['id']}/checks").json()["items"][0]["status"] == "baseline"
+    log = client.get("/api/log?per_page=5").json()
+    assert log["items"][0]["errand_name"] == "Aurora"
     n = store.add_notification(e["id"], "T", "B", "inbox")
     inbox = client.get("/api/inbox").json()
-    assert inbox[0]["read"] is False
+    assert inbox["items"][0]["read"] is False and inbox["items"][0]["errand_name"] == "Aurora"
     assert client.post(f"/api/inbox/{n['id']}/read").json() == {"ok": True}
-    assert client.get("/api/inbox").json()[0]["read"] is True
+    assert client.get("/api/inbox").json()["items"][0]["read"] is True
     assert client.post("/api/inbox/999/read").status_code == 404
 
 

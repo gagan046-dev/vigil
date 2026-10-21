@@ -64,9 +64,27 @@ SCHEMA = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS notifications_at_idx ON notifications (at DESC)",
+    "CREATE INDEX IF NOT EXISTS notifications_unread_idx ON notifications (at DESC) WHERE NOT read",
+    """
+    CREATE TABLE IF NOT EXISTS compare_runs (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        query text NOT NULL,
+        status text NOT NULL DEFAULT 'queued'
+            CHECK (status IN ('queued','searching','fetching','done','error')),
+        product jsonb,
+        offers jsonb NOT NULL DEFAULT '[]'::jsonb,
+        best jsonb,
+        notes jsonb NOT NULL DEFAULT '{}'::jsonb,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        finished_at timestamptz,
+        errand_id uuid REFERENCES errands(id) ON DELETE CASCADE
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS compare_runs_created_idx ON compare_runs (created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS compare_runs_errand_idx ON compare_runs (errand_id, created_at DESC)",
 ]
 
-TABLES = ("errands", "checks", "notifications")
+TABLES = ("errands", "checks", "notifications", "compare_runs")
 
 
 def migrate(conninfo: str, attempts: int = 30, delay_s: float = 2.0) -> None:

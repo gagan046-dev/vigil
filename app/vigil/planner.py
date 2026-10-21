@@ -153,7 +153,59 @@ def _clamp_interval(minutes: int, notes: list[str]) -> int:
     return snapped
 
 
+_BEST = re.compile(
+    r"\b(?:best|lowest|cheapest)\s+(?:price|deal|offer)s?\b|\bcompare\s+prices?\b|"
+    r"\bacross\s+(?:all\s+)?(?:sellers|shops|stores|sites)\b",
+    re.IGNORECASE,
+)
+_BEST_FILLER = re.compile(
+    r"\b(?:tell|notify|alert|ping|let|show|give|find)\s+me\b|\b(?:let\s+me\s+)?know\b|\bwhen(?:ever)?\b|"
+    r"\b(?:in\s+the\s+)?market\b|\bcurrently\b|\bavailable\b|\bany\s+(?:seller|shop|store)\b|"
+    r"\b(?:the|of|for|on|is|at|me|please|watch|track|gets?|price|drops?|falls?|goes|to|a|an)\b",
+    re.IGNORECASE,
+)
+BEST_PRICE_MIN_RECOMMENDED = 60
+
+
+def _best_rules(text: str) -> _Draft:
+    """'Tell me when the best price of Aurora 15 drops below ₹1,25,000' -> best_price_below."""
+    notes: list[str] = []
+    url = _first_url(text)
+    rest = URL_RE.sub(" ", text)
+    minutes, rest = _parse_frequency(rest)
+    if minutes is None:
+        minutes = BEST_PRICE_MIN_RECOMMENDED
+        notes.append("No frequency given — checking every 60 minutes.")
+    every = _clamp_interval(minutes, notes)
+    if every < BEST_PRICE_MIN_RECOMMENDED:
+        notes.append(
+            "Each best-price check visits several seller sites; every 60 minutes or less often is "
+            "recommended for real shops."
+        )
+    data: dict = {"kind": "best_price_below", "every_minutes": every, "url": url}
+    below = _price_after(_BELOW, rest)
+    if below:
+        data["threshold"] = below[1].value
+        rest = rest[: below[0]]
+    else:
+        notes.append("No target price given — you'll be told whenever the best price drops.")
+    rest = _BEST.sub(" ", rest)
+    rest = _BEST_FILLER.sub(" ", rest)
+    query = re.sub(r"\s+", " ", re.sub(r"[?!,;:]+", " ", rest)).strip(" .'\"")
+    if query:
+        data["query"] = query[:300]
+    elif not url:
+        raise PlanError("Tell me which product to compare, e.g. 'best price of Apple iPhone 16 128GB'.")
+    label = query or _host(url)
+    name = f"Best price: {label}"
+    data["name"] = name if len(name) <= 80 else name[:77] + "..."
+    notes.append("Searches the allowed sellers on every check and alerts on the cheapest matching offer.")
+    return _Draft(data, notes, False)
+
+
 def _rules(text: str) -> _Draft:
+    if _BEST.search(text or ""):
+        return _best_rules(text)
     url = _first_url(text)
     if not url:
         raise PlanError("I couldn't find a web address (http:// or https://) in your request.")
@@ -229,8 +281,9 @@ def _rules(text: str) -> _Draft:
 PLANNER_SYSTEM = (
     "You convert a user's request to watch a web page into strict JSON. Reply with ONE JSON object "
     "and nothing else, with keys: name (<=80 chars), url (must be copied from the request), kind "
-    "(one of price_below, price_above, text_appears, text_disappears, page_changed), threshold "
-    "(number, only for price kinds, convert lakh/k to a plain number), keyword (text to look for, "
+    "(one of price_below, price_above, text_appears, text_disappears, page_changed, best_price_below), "
+    "query (product name, only for best_price_below: the best price across many sellers; url is then "
+    "optional), threshold (number, for price kinds, convert lakh/k to a plain number), keyword (text to look for, "
     "only for text kinds), selector (CSS selector or null), render (true if the page needs JavaScript), "
     "every_minutes (one of " + ", ".join(map(str, ALLOWED_INTERVALS)) + "), notes (list of short "
     "strings explaining assumptions)."

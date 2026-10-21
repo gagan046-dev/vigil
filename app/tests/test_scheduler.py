@@ -179,3 +179,27 @@ def test_reconcile_tolerates_orphan_already_deleted():
 
     batch.delete_namespaced_cron_job = racing_delete
     assert k.reconcile([]) == {"created": 0, "deleted": 1}
+
+
+def test_next_run_at():
+    from datetime import UTC, datetime
+
+    from vigil.scheduler import next_run_at
+
+    now = datetime(2026, 10, 21, 6, 7, 30, tzinfo=UTC)  # 11:37:30 in Asia/Kolkata
+    e = {"active": True, "spec": {"every_minutes": 15}}
+    assert next_run_at(e, "kubernetes", now=now) == datetime(2026, 10, 21, 6, 15, tzinfo=UTC)
+    assert next_run_at({**e, "spec": {"every_minutes": 60}}, "kubernetes", now=now) == datetime(
+        2026, 10, 21, 6, 30, tzinfo=UTC
+    )  # 12:00 IST
+    assert next_run_at({**e, "spec": {"every_minutes": 360}}, "kubernetes", now=now) == datetime(
+        2026, 10, 21, 6, 30, tzinfo=UTC
+    )  # 12:00 IST is a multiple of 6 hours
+    assert next_run_at({**e, "spec": {"every_minutes": 1440}}, "kubernetes", now=now) == datetime(
+        2026, 10, 22, 2, 30, tzinfo=UTC
+    )  # 08:00 IST tomorrow
+    assert next_run_at({**e, "active": False}, "kubernetes", now=now) is None
+    assert next_run_at(e, "none", now=now) is None
+    assert next_run_at({**e, "last_checked_at": now}, "internal", now=now) == datetime(
+        2026, 10, 21, 6, 22, 30, tzinfo=UTC
+    )

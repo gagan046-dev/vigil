@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import copy
 import itertools
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from vigil.fetch import FetchError, FetchResult
 
@@ -14,7 +15,9 @@ class MemoryStore:
         self.errands: dict[str, dict] = {}
         self.checks: list[dict] = []
         self.notifications: list[dict] = []
+        self.compares: dict[str, dict] = {}
         self._ids = itertools.count(1)
+        self._clock = itertools.count(1)
 
     def ping(self):
         return True
@@ -113,6 +116,118 @@ class MemoryStore:
                 n["read"] = True
                 return True
         return False
+
+    # -- pagination (same contract as PgStore: (items, total))
+    @staticmethod
+    def _slice(rows, offset, limit):
+        return [dict(r) for r in rows[offset : offset + limit]], len(rows)
+
+    def _status(self, e):
+        if not e.get("active", True):
+            return "paused"
+        return "failing" if int(e.get("consecutive_failures") or 0) >= 3 else "active"
+
+    def _prev_value(self, e):
+        for c in reversed(self.checks):
+            if c["errand_id"] == e["id"] and c["value"] is not None and c["value"] != e.get("last_value"):
+                return c["value"]
+        return None
+
+    def page_errands(self, offset=0, limit=25, q=None, status=None):
+        rows = self.list_errands()
+        if q:
+            ql = q.lower()
+            rows = [
+                e
+                for e in rows
+                if ql in e["name"].lower()
+                or ql in str(e["spec"].get("url") or "").lower()
+                or ql in str(e["spec"].get("query") or "").lower()
+            ]
+        if status:
+            rows = [e for e in rows if self._status(e) == status]
+        rows = [{**e, "prev_value": self._prev_value(e)} for e in rows]
+        return self._slice(rows, offset, limit)
+
+    def page_checks(self, eid, offset=0, limit=25):
+        return self._slice([c for c in reversed(self.checks) if c["errand_id"] == eid], offset, limit)
+
+    def errand_history(self, eid, days=30):
+        since = datetime.now(UTC) - timedelta(days=days)
+        rows = [c for c in self.checks if c["errand_id"] == eid and c["at"] >= since]
+        return [{"at": c["at"], "value": c["value"], "status": c["status"]} for c in rows]
+
+    def page_log(self, offset=0, limit=25, status=None, errand_id=None):
+        rows = [
+            r
+            for r in self.recent_log(10**9)
+            if (status is None or r["status"] == status) and (errand_id is None or r["errand_id"] == errand_id)
+        ]
+        return self._slice(rows, offset, limit)
+
+    def page_inbox(self, offset=0, limit=25, unread=None):
+        rows = []
+        for n in reversed(self.notifications):
+            if unread is not None and n["read"] == unread:
+                continue
+            e = self.errands.get(n["errand_id"]) if n["errand_id"] else None
+            rows.append({**n, "errand_name": e["name"] if e else None})
+        return self._slice(rows, offset, limit)
+
+    def unread_count(self):
+        return sum(1 for n in self.notifications if not n["read"])
+
+    def mark_all_read(self):
+        n = 0
+        for row in self.notifications:
+            if not row["read"]:
+                row["read"] = True
+                n += 1
+        return n
+
+    # -- price comparisons
+    def create_compare(self, query, errand_id=None, notes=None):
+        cid = str(uuid.uuid4())
+        row = {
+            "id": cid,
+            "query": query,
+            "status": "queued",
+            "product": None,
+            "offers": [],
+            "best": None,
+            "notes": dict(notes or {}),
+            "created_at": datetime.now(UTC) + timedelta(microseconds=next(self._clock)),
+            "finished_at": None,
+            "errand_id": errand_id,
+        }
+        self.compares[cid] = row
+        return copy.deepcopy(row)
+
+    def get_compare(self, cid):
+        row = self.compares.get(cid)
+        return copy.deepcopy(row) if row else None
+
+    def update_compare(self, cid, **fields):
+        if cid in self.compares:
+            allowed = ("status", "product", "offers", "best", "notes", "finished_at")
+            self.compares[cid].update(copy.deepcopy({k: v for k, v in fields.items() if k in allowed}))
+
+    def page_compares(self, offset=0, limit=25, errand_id=None):
+        rows = sorted(self.compares.values(), key=lambda r: r["created_at"], reverse=True)
+        rows = [r for r in rows if r["errand_id"] == errand_id]
+        rows = [{**{k: v for k, v in r.items() if k != "offers"}, "offers_count": len(r["offers"])} for r in rows]
+        return self._slice(rows, offset, limit)
+
+    def latest_compare(self, eid):
+        rows = [r for r in self.compares.values() if r["errand_id"] == eid]
+        return copy.deepcopy(max(rows, key=lambda r: r["created_at"])) if rows else None
+
+    def prune_compares(self, eid, keep=50):
+        rows = sorted(
+            (r for r in self.compares.values() if r["errand_id"] == eid), key=lambda r: r["created_at"], reverse=True
+        )
+        for r in rows[keep:]:
+            del self.compares[r["id"]]
 
 
 class FakeFetcher:

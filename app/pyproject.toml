@@ -24,4 +24,4 @@ ignore = [
 testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "-q"
-filterwarnings = ["ignore:Using `httpx` with `starlette.testclient`"]
+filterwarnings = ["ignore:Using `httpx` with `starlette.testclient`", "ignore:You should not use the .timeout. argument"]

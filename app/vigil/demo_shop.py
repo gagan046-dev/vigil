@@ -5,10 +5,11 @@ Run as: uvicorn vigil.demo_shop:app --port 8000
 
 from __future__ import annotations
 
+import json
 import threading
 from html import escape
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
@@ -16,6 +17,19 @@ from .extract import group_indian
 
 PRODUCT = "Aurora 15 (RTX 5070)"
 DEFAULT_PRICE = 134990.0
+
+# Fictional sellers for the price-comparison demo (no real brands). Each one exposes its
+# price differently so every extraction path is exercised:
+#   pixelmart  JSON-LD Product/Offer           bazaar99  meta tags only
+#   northwind  price filled in by JavaScript   bytebay   a *different* model (must be rejected)
+#   quietcart  disallowed by robots.txt (must show up as blocked)
+DEFAULT_SELLERS = {
+    "pixelmart": {"price": 129990.0, "mrp": 149990.0, "in_stock": True},
+    "bazaar99": {"price": 124499.0, "mrp": 139990.0, "in_stock": True},
+    "northwind": {"price": 131000.0, "mrp": None, "in_stock": True},
+    "bytebay": {"price": 189990.0, "mrp": 199990.0, "in_stock": True},
+    "quietcart": {"price": 119990.0, "mrp": None, "in_stock": True},
+}
 
 _lock = threading.Lock()
 _state: dict = {}
@@ -29,6 +43,7 @@ def reset_state() -> dict:
             in_stock=False,
             layout=1,
             notices=["Welcome to the Aurora store.", "Free shipping on orders over ₹50,000."],
+            sellers={k: dict(v) for k, v in DEFAULT_SELLERS.items()},
         )
         return dict(_state)
 
@@ -60,7 +75,7 @@ def _page(title: str, body: str) -> HTMLResponse:
         f"<!doctype html><html lang='en'><head><meta charset='utf-8'><title>{escape(title)}</title>"
         f"<meta name='viewport' content='width=device-width,initial-scale=1'><style>{_STYLE}</style>"
         f"</head><body><nav><a href='/'>Shop</a> <a href='/static'>Static</a> <a href='/notices'>Notices</a> "
-        f"<a href='/admin'>Admin</a></nav>{body}</body></html>"
+        f"<a href='/sellers'>Sellers</a> <a href='/admin'>Admin</a></nav>{body}</body></html>"
     )
     return HTMLResponse(html)
 
@@ -72,7 +87,7 @@ def healthz() -> dict:
 
 @app.get("/robots.txt", response_class=PlainTextResponse)
 def robots() -> str:
-    return "User-agent: *\nAllow: /\n"
+    return "User-agent: *\nDisallow: /sellers/quietcart/\nAllow: /\n"
 
 
 @app.get("/api/product")
@@ -135,6 +150,10 @@ _ADMIN = """
 <p><button data-layout="1">Layout 1</button> <button data-layout="2">Layout 2</button></p>
 <form id="f-notice"><label>Notice <input name="text" maxlength="200" value="Slot available"></label>
 <button>Post notice</button></form>
+<form id="f-seller"><label>Seller <select name="key"><option>pixelmart</option><option>bazaar99</option>
+<option>northwind</option><option>bytebay</option><option>quietcart</option></select></label>
+<label>Price (INR) <input name="price" type="number" min="1" value="119990"></label>
+<button>Set seller price</button></form>
 <p><button id="reset">Reset everything</button></p>
 <pre id="state"></pre>
 <script>
@@ -148,6 +167,8 @@ document.querySelectorAll('[data-stock]').forEach(b=>b.onclick=()=>post('/admin/
   {in_stock:b.dataset.stock==='true'}));
 document.querySelectorAll('[data-layout]').forEach(b=>b.onclick=()=>post('/admin/layout',
   {layout:Number(b.dataset.layout)}));
+document.getElementById('f-seller').onsubmit=e=>{e.preventDefault();
+  post('/admin/sellers/'+e.target.key.value,{price:Number(e.target.price.value)})};
 document.getElementById('reset').onclick=()=>post('/admin/reset');
 fetch('/admin/state').then(r=>r.json()).then(s=>{document.getElementById('state').textContent=
   JSON.stringify(s,null,2)});
@@ -178,7 +199,11 @@ class NoticeIn(BaseModel):
 
 def _snapshot() -> dict:
     with _lock:
-        return dict(_state, notices=list(_state["notices"]))
+        return dict(
+            _state,
+            notices=list(_state["notices"]),
+            sellers={k: dict(v) for k, v in _state["sellers"].items()},
+        )
 
 
 @app.get("/admin/state")
@@ -218,3 +243,159 @@ def add_notice(body: NoticeIn) -> dict:
 def reset() -> dict:
     reset_state()
     return _snapshot()
+
+
+# ---------------------------------------------------------------- demo sellers
+
+
+def _seller(key: str) -> dict:
+    with _lock:
+        return dict(_state["sellers"][key])
+
+
+def _stock_text(in_stock: bool) -> str:
+    return "In stock" if in_stock else "Out of stock"
+
+
+def _seller_page(title: str, shop: str, head: str, body: str) -> HTMLResponse:
+    html = (
+        f"<!doctype html><html lang='en'><head><meta charset='utf-8'><title>{escape(title)} | {escape(shop)}</title>"
+        f"<meta name='viewport' content='width=device-width,initial-scale=1'><style>{_STYLE}</style>{head}"
+        f"</head><body><nav><strong>{escape(shop)}</strong> (fictional demo seller)</nav>{body}{_FILLER}</body></html>"
+    )
+    return HTMLResponse(html)
+
+
+def _ld(data: dict) -> str:
+    # "</" must not end the script element early
+    return "<script type='application/ld+json'>" + json.dumps(data).replace("</", "<\\/") + "</script>"
+
+
+@app.get("/sellers/pixelmart/aurora-15", response_class=HTMLResponse)
+def seller_pixelmart() -> HTMLResponse:
+    s = _seller("pixelmart")
+    offer = {
+        "@type": "Offer",
+        "price": f"{s['price']:.2f}",
+        "priceCurrency": "INR",
+        "availability": "https://schema.org/" + ("InStock" if s["in_stock"] else "OutOfStock"),
+    }
+    if s.get("mrp"):
+        offer["priceSpecification"] = {
+            "@type": "UnitPriceSpecification",
+            "priceType": "https://schema.org/ListPrice",
+            "price": s["mrp"],
+            "priceCurrency": "INR",
+        }
+    ld = _ld(
+        {
+            "@context": "https://schema.org",
+            "@graph": [
+                {"@type": "BreadcrumbList", "itemListElement": []},
+                {
+                    "@type": "Product",
+                    "name": "Aurora 15 (RTX 5070) Gaming Laptop",
+                    "sku": "AUR15-5070",
+                    "offers": offer,
+                },
+            ],
+        }
+    )
+    body = (
+        "<h1>Aurora 15 (RTX 5070) Gaming Laptop</h1>"
+        f"<p>Deal price: <span class='deal'>{rupees(s['price'])}</span></p>"
+        f"<p class='stock'>{_stock_text(s['in_stock'])}</p>"
+    )
+    return _seller_page("Aurora 15 (RTX 5070)", "PixelMart", ld, body)
+
+
+@app.get("/sellers/bazaar99/aurora-15", response_class=HTMLResponse)
+def seller_bazaar99() -> HTMLResponse:
+    s = _seller("bazaar99")
+    head = (
+        "<meta property='og:title' content='Aurora 15 RTX 5070 15.6\" Gaming Laptop'>"
+        f"<meta property='product:price:amount' content='{s['price']:.0f}'>"
+        "<meta property='product:price:currency' content='INR'>"
+        f"<meta property='product:availability' content='{'in stock' if s['in_stock'] else 'out of stock'}'>"
+    )
+    mrp = f"<p>MRP <del>{rupees(s['mrp'])}</del></p>" if s.get("mrp") else ""
+    body = (
+        '<h1>Aurora 15 RTX 5070 15.6" Gaming Laptop</h1>'
+        f"<p>Our price today {rupees(s['price'])}</p>{mrp}"
+        f"<p>{_stock_text(s['in_stock'])}</p>"
+    )
+    return _seller_page("Aurora 15 RTX 5070", "Bazaar99", head, body)
+
+
+@app.get("/sellers/northwind/api")
+def seller_northwind_api() -> dict:
+    s = _seller("northwind")
+    return {"price_text": rupees(s["price"]), "stock": _stock_text(s["in_stock"])}
+
+
+@app.get("/sellers/northwind/aurora-15", response_class=HTMLResponse)
+def seller_northwind() -> HTMLResponse:
+    # A plain HTTP fetch only sees "Loading…": the price needs a browser.
+    body = (
+        "<h1>Aurora 15 Gaming Laptop, RTX 5070</h1>"
+        "<p>Price: <span class='price' id='nw-price'>Loading…</span></p>"
+        "<p id='nw-stock'>Loading…</p>"
+        "<script>fetch('/sellers/northwind/api').then(r=>r.json()).then(p=>{"
+        "document.getElementById('nw-price').textContent=p.price_text;"
+        "document.getElementById('nw-stock').textContent=p.stock;});</script>"
+    )
+    return _seller_page("Aurora 15 Gaming Laptop", "Northwind Electronics", "", body)
+
+
+@app.get("/sellers/bytebay/aurora-15-pro", response_class=HTMLResponse)
+def seller_bytebay() -> HTMLResponse:
+    s = _seller("bytebay")
+    ld = _ld(
+        {
+            "@context": "https://schema.org",
+            "@type": "Product",
+            "name": "Aurora 15 Pro RTX 5080 Gaming Laptop",
+            "offers": {
+                "@type": "AggregateOffer",
+                "lowPrice": s["price"],
+                "highPrice": s["mrp"] or s["price"],
+                "priceCurrency": "INR",
+                "offerCount": 2,
+            },
+        }
+    )
+    body = f"<h1>Aurora 15 Pro RTX 5080 Gaming Laptop</h1><p>From {rupees(s['price'])}</p>"
+    return _seller_page("Aurora 15 Pro RTX 5080", "ByteBay", ld, body)
+
+
+@app.get("/sellers/quietcart/aurora-15", response_class=HTMLResponse)
+def seller_quietcart() -> HTMLResponse:
+    # robots.txt disallows this path, so Vigil must never fetch it.
+    s = _seller("quietcart")
+    body = f"<h1>Aurora 15 RTX 5070</h1><p>Price: <span class='price'>{rupees(s['price'])}</span></p>"
+    return _seller_page("Aurora 15 RTX 5070", "QuietCart", "", body)
+
+
+class SellerIn(BaseModel):
+    price: float | None = Field(default=None, gt=0, lt=1e9)
+    in_stock: bool | None = None
+
+
+@app.post("/admin/sellers/{key}")
+def set_seller(key: str, body: SellerIn) -> dict:
+    with _lock:
+        if key not in _state["sellers"]:
+            raise HTTPException(404, "unknown seller")
+        if body.price is not None:
+            _state["sellers"][key]["price"] = body.price
+        if body.in_stock is not None:
+            _state["sellers"][key]["in_stock"] = body.in_stock
+    return _snapshot()
+
+
+@app.get("/sellers", response_class=HTMLResponse)
+def sellers_index() -> HTMLResponse:
+    from .search import DEMO_SELLERS
+
+    items = "".join(f"<li><a href='{path}'>{escape(name)}</a></li>" for name, path in DEMO_SELLERS.values())
+    return _page("Demo sellers", f"<h1>Demo sellers</h1><p>Fictional shops for price comparison.</p><ul>{items}</ul>")

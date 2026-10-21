@@ -4,23 +4,28 @@ from __future__ import annotations
 
 import hmac
 import logging
+import math
 import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from typing import Literal
+from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from . import planner, queue
+from .compare import clean_reference, is_url
 from .config import VERSION, Settings, load_settings
 from .llm import LLMClient
 from .metrics import API_PLANS_TOTAL, ERRANDS_CREATED_TOTAL
 from .models import ErrandSpec, describe_condition
-from .scheduler import make_scheduler, schedule_for
+from .scheduler import make_scheduler, next_run_at, schedule_for
+from .search import sellers_for
 
 log = logging.getLogger("vigil.api")
 
@@ -51,7 +56,37 @@ class ActiveIn(BaseModel):
     active: bool
 
 
+class CompareIn(BaseModel):
+    query: str = Field(min_length=2, max_length=500)
+    max_pages: int | None = Field(default=None, ge=1, le=20)
+
+    @field_validator("query")
+    @classmethod
+    def _check_query(cls, v: str) -> str:
+        v = " ".join(v.split())
+        if len(v) < 2:
+            raise ValueError("enter a product name or a product URL")
+        if v.lower().startswith(("http://", "https://")):
+            if not urlsplit(v).hostname or not is_url(v):
+                raise ValueError("the product URL is not valid")
+        elif "://" in v:
+            raise ValueError("only http(s) product URLs can be compared")
+        return v
+
+
+class TrackIn(BaseModel):
+    threshold: float | None = Field(default=None, gt=0, lt=1e12)
+    every_minutes: int = 60
+
+
+MAX_PER_PAGE = 100
 _HIDDEN = ("last_text", "last_hash")
+
+
+def errand_status(errand: dict) -> str:
+    if not errand.get("active", True):
+        return "paused"
+    return "failing" if int(errand.get("consecutive_failures") or 0) >= 3 else "active"
 
 
 def _public(errand: dict) -> dict:
@@ -60,7 +95,25 @@ def _public(errand: dict) -> dict:
     out["schedule"] = schedule_for(errand)
     out["condition"] = describe_condition(spec)
     out["failing"] = int(errand.get("consecutive_failures") or 0) >= 3
+    out["status"] = errand_status(errand)
+    prev, last = errand.get("prev_value"), errand.get("last_value")
+    out["prev_value"] = prev
+    out["change"] = round(last - prev, 2) if prev is not None and last is not None else None
     return out
+
+
+def paged(items: list, total: int, page: int, per_page: int) -> dict:
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "pages": max(1, math.ceil(total / per_page)),
+    }
+
+
+def _offset(page: int, per_page: int) -> int:
+    return (page - 1) * per_page
 
 
 def _reconcile_loop(deps: Deps, attempts: int = 20) -> None:
@@ -161,10 +214,8 @@ def create_app(
 
     # ------------------------------------------------------------ errands
 
-    @app.post("/api/errands", status_code=201)
-    def create_errand(body: ErrandIn, deps: Deps = Depends(get_deps)) -> dict:
-        spec = body.spec.model_dump()
-        errand = deps.store.create_errand(body.spec.name, spec, body.prompt)
+    def _create(deps: Deps, spec: ErrandSpec, prompt: str | None) -> dict:
+        errand = deps.store.create_errand(spec.name, spec.model_dump(), prompt)
         ERRANDS_CREATED_TOTAL.inc()
         try:
             deps.scheduler.upsert(errand)
@@ -173,9 +224,44 @@ def create_app(
         queue.enqueue_check(deps.r, errand["id"])
         return _public(errand)
 
+    @app.post("/api/errands", status_code=201)
+    def create_errand(body: ErrandIn, deps: Deps = Depends(get_deps)) -> dict:
+        return _create(deps, body.spec, body.prompt)
+
     @app.get("/api/errands")
-    def list_errands(deps: Deps = Depends(get_deps)) -> list[dict]:
-        return [_public(e) for e in deps.store.list_errands()]
+    def list_errands(
+        page: int = Query(1, ge=1),
+        per_page: int = Query(25, ge=1, le=MAX_PER_PAGE),
+        q: str | None = Query(None, max_length=200),
+        status: Literal["active", "paused", "failing"] | None = None,
+        deps: Deps = Depends(get_deps),
+    ) -> dict:
+        items, total = deps.store.page_errands(_offset(page, per_page), per_page, (q or "").strip() or None, status)
+        return paged([_public(e) for e in items], total, page, per_page)
+
+    @app.get("/api/errands/{errand_id}")
+    def errand_detail(errand_id: uuid.UUID, deps: Deps = Depends(get_deps)) -> dict:
+        errand = _errand_or_404(deps, errand_id)
+        out = _public(errand)
+        out["next_run_at"] = next_run_at(
+            errand, getattr(deps.scheduler, "name", deps.settings.scheduler), deps.settings.schedule_tz
+        )
+        out["latest_compare"] = None
+        if (errand.get("spec") or {}).get("kind") == "best_price_below":
+            run = deps.store.latest_compare(str(errand_id))
+            if run:
+                out["latest_compare"] = {k: run.get(k) for k in ("id", "status", "best", "product", "created_at")}
+        return out
+
+    @app.get("/api/errands/{errand_id}/history")
+    def errand_history(
+        errand_id: uuid.UUID, days: int = Query(30, ge=1, le=365), deps: Deps = Depends(get_deps)
+    ) -> list[dict]:
+        _errand_or_404(deps, errand_id)
+        return [
+            {"at": c["at"], "value": c["value"], "status": c["status"]}
+            for c in deps.store.errand_history(str(errand_id), days)
+        ]
 
     @app.patch("/api/errands/{errand_id}")
     def patch_errand(errand_id: uuid.UUID, body: ActiveIn, deps: Deps = Depends(get_deps)) -> dict:
@@ -207,26 +293,105 @@ def create_app(
 
     @app.get("/api/errands/{errand_id}/checks")
     def errand_checks(
-        errand_id: uuid.UUID, limit: int = Query(50, ge=1, le=500), deps: Deps = Depends(get_deps)
-    ) -> list[dict]:
+        errand_id: uuid.UUID,
+        page: int = Query(1, ge=1),
+        per_page: int = Query(25, ge=1, le=MAX_PER_PAGE),
+        deps: Deps = Depends(get_deps),
+    ) -> dict:
         _errand_or_404(deps, errand_id)
-        return deps.store.list_checks(str(errand_id), limit)
+        items, total = deps.store.page_checks(str(errand_id), _offset(page, per_page), per_page)
+        return paged(items, total, page, per_page)
 
     @app.get("/api/log")
-    def log_feed(limit: int = Query(100, ge=1, le=500), deps: Deps = Depends(get_deps)) -> list[dict]:
-        return deps.store.recent_log(limit)
+    def log_feed(
+        page: int = Query(1, ge=1),
+        per_page: int = Query(25, ge=1, le=MAX_PER_PAGE),
+        status: Literal["baseline", "unchanged", "changed", "triggered", "error"] | None = None,
+        errand_id: uuid.UUID | None = None,
+        deps: Deps = Depends(get_deps),
+    ) -> dict:
+        eid = str(errand_id) if errand_id else None
+        items, total = deps.store.page_log(_offset(page, per_page), per_page, status, eid)
+        return paged(items, total, page, per_page)
 
     # ------------------------------------------------------------ inbox
 
     @app.get("/api/inbox")
-    def inbox(limit: int = Query(50, ge=1, le=500), deps: Deps = Depends(get_deps)) -> list[dict]:
-        return deps.store.list_inbox(limit)
+    def inbox(
+        page: int = Query(1, ge=1),
+        per_page: int = Query(25, ge=1, le=MAX_PER_PAGE),
+        unread: bool | None = None,
+        deps: Deps = Depends(get_deps),
+    ) -> dict:
+        items, total = deps.store.page_inbox(_offset(page, per_page), per_page, unread)
+        return paged(items, total, page, per_page)
+
+    @app.get("/api/inbox/unread-count")
+    def inbox_unread_count(deps: Deps = Depends(get_deps)) -> dict:
+        return {"count": deps.store.unread_count()}
+
+    @app.post("/api/inbox/read-all")
+    def mark_all_read(deps: Deps = Depends(get_deps)) -> dict:
+        return {"ok": True, "updated": deps.store.mark_all_read()}
 
     @app.post("/api/inbox/{notification_id}/read")
     def mark_read(notification_id: int, deps: Deps = Depends(get_deps)) -> dict:
         if not deps.store.mark_read(notification_id):
             raise HTTPException(404, "notification not found")
         return {"ok": True}
+
+    # ------------------------------------------------------------ price comparison
+
+    def _compare_or_404(deps: Deps, compare_id: uuid.UUID) -> dict:
+        run = deps.store.get_compare(str(compare_id))
+        if run is None:
+            raise HTTPException(404, "comparison not found")
+        return run
+
+    @app.post("/api/compare", status_code=202)
+    def start_compare(body: CompareIn, deps: Deps = Depends(get_deps)) -> dict:
+        run = deps.store.create_compare(body.query, notes={"max_pages": body.max_pages} if body.max_pages else {})
+        queue.enqueue_compare(deps.r, run["id"], body.max_pages)
+        return {"id": run["id"], "status": run["status"]}
+
+    @app.get("/api/compare")
+    def list_compares(
+        page: int = Query(1, ge=1),
+        per_page: int = Query(25, ge=1, le=MAX_PER_PAGE),
+        errand_id: uuid.UUID | None = None,
+        deps: Deps = Depends(get_deps),
+    ) -> dict:
+        eid = str(errand_id) if errand_id else None
+        items, total = deps.store.page_compares(_offset(page, per_page), per_page, eid)
+        return paged(items, total, page, per_page)
+
+    @app.get("/api/compare/{compare_id}")
+    def get_compare(compare_id: uuid.UUID, deps: Deps = Depends(get_deps)) -> dict:
+        return _compare_or_404(deps, compare_id)
+
+    @app.post("/api/compare/{compare_id}/track", status_code=201)
+    def track_compare(compare_id: uuid.UUID, body: TrackIn, deps: Deps = Depends(get_deps)) -> dict:
+        run = _compare_or_404(deps, compare_id)
+        if run.get("status") != "done":
+            raise HTTPException(409, "the comparison has not finished yet")
+        product = run.get("product") or {}
+        source_url = product.get("url") or (run["query"] if is_url(run["query"]) else None)
+        raw_title = product.get("title") or ("" if is_url(run["query"]) else run["query"])
+        title = clean_reference(raw_title) if raw_title else None
+        label = title or (urlsplit(source_url).hostname if source_url else run["query"])
+        name = f"Best price: {label}"
+        try:
+            spec = ErrandSpec(
+                name=name if len(name) <= 80 else name[:77] + "...",
+                kind="best_price_below",
+                query=title[:300] if title else None,
+                url=source_url,
+                threshold=body.threshold,
+                every_minutes=body.every_minutes,
+            )
+        except ValidationError as exc:
+            raise HTTPException(422, exc.errors()[0].get("msg", "invalid watch")) from exc
+        return _create(deps, spec, f"Track the best price of {label}")
 
     # ------------------------------------------------------------ system
 
@@ -247,6 +412,9 @@ def create_app(
             "queue_depth": depth,
             "scheduler": getattr(deps.scheduler, "name", s.scheduler),
             "min_interval_minutes": s.min_interval_minutes,
+            "search_provider": s.search_provider,
+            "compare_sellers": [{"key": x.key, "name": x.name, "domain": x.domain} for x in sellers_for(s)],
+            "compare_max_pages": s.compare_max_pages,
         }
 
     # ------------------------------------------------------------ internal

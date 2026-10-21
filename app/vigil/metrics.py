@@ -15,3 +15,4 @@ FETCH_SECONDS = Histogram(
 NOTIFICATIONS_TOTAL = Counter("vigil_notifications_total", "Notifications delivered", ["channel"])
 API_PLANS_TOTAL = Counter("vigil_api_plans_total", "Plans produced by the API", ["source"])
 ERRANDS_CREATED_TOTAL = Counter("vigil_errands_created_total", "Errands created")
+COMPARES_TOTAL = Counter("vigil_compares_total", "Price comparisons run by workers", ["result"])

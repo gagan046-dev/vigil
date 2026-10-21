@@ -184,3 +184,16 @@ def test_llm_invalid_reply_falls_back_to_rules():
     assert res.source == "rules"
     assert res.spec.kind == "page_changed"
     assert any("rule-based" in n for n in res.notes)
+
+
+def test_best_price_requests_need_no_url():
+    r = plan("Tell me when the best price of Aurora 15 drops below ₹1,25,000")
+    assert r.spec.kind == "best_price_below" and r.spec.query == "Aurora 15" and r.spec.threshold == 125000
+    assert r.spec.url is None and r.spec.every_minutes == 60 and r.spec.name == "Best price: Aurora 15"
+    r = plan("find me the lowest price of Apple iPhone 16 128GB in the market every 15 minutes")
+    assert r.spec.query == "Apple iPhone 16 128GB" and r.spec.threshold is None and r.spec.every_minutes == 15
+    assert any("60 minutes" in n for n in r.notes)
+    r = plan("compare prices for https://www.flipkart.com/apple-iphone-16/p/itm1 daily")
+    assert r.spec.url == "https://www.flipkart.com/apple-iphone-16/p/itm1" and r.spec.every_minutes == 1440
+    with pytest.raises(PlanError):
+        plan("tell me the best price")

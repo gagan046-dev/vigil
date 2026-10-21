@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import logging
 import threading
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone, tzinfo
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from . import queue
 from .config import Settings
@@ -254,3 +255,36 @@ def make_scheduler(settings: Settings, store=None, r=None):
     if settings.scheduler == "internal":
         return InternalScheduler(store, r)
     return NoneScheduler()
+
+
+def _tz(name: str) -> tzinfo:
+    try:
+        return ZoneInfo(name)
+    except Exception:  # no tz database (e.g. a bare Windows venv): India has no DST, so a fixed offset is exact
+        return timezone(timedelta(hours=5, minutes=30)) if name in ("Asia/Kolkata", "Asia/Calcutta") else UTC
+
+
+def next_run_at(errand: dict, scheduler_name: str, tz_name: str = "Asia/Kolkata", now: datetime | None = None):
+    """When the errand's schedule fires next (None when paused or nothing schedules it)."""
+    if not errand.get("active", True) or scheduler_name in ("none", ""):
+        return None
+    now = now or datetime.now(UTC)
+    every = _every(errand)
+    if scheduler_name == "internal":
+        last = errand.get("last_checked_at")
+        return max(now, last + timedelta(minutes=every)) if last else now
+    local = now.astimezone(_tz(tz_name)).replace(second=0, microsecond=0)
+    if every >= 1440:
+        nxt = local.replace(hour=8, minute=0)
+        if nxt <= now:
+            nxt += timedelta(days=1)
+    elif every >= 60:
+        step = every // 60
+        nxt = local.replace(minute=0) + timedelta(hours=1)
+        while nxt.hour % step:
+            nxt += timedelta(hours=1)
+    else:
+        nxt = local + timedelta(minutes=1)
+        while nxt.minute % every:
+            nxt += timedelta(minutes=1)
+    return nxt.astimezone(UTC)

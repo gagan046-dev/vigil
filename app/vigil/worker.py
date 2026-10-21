@@ -18,6 +18,7 @@ from bs4 import BeautifulSoup
 from prometheus_client import start_http_server
 
 from . import queue
+from .compare import CompareOutcome, Comparer, best_summary, clean_reference
 from .config import Settings, load_settings
 from .evaluate import condition_true, diff_summary, evaluate, unified_diff_text
 from .extract import (
@@ -34,8 +35,9 @@ from .extract import (
 )
 from .fetch import FetchError, FetchResult
 from .llm import LLMClient
-from .metrics import CHECKS_TOTAL
-from .models import PRICE_KINDS, TEXT_KINDS, ErrandSpec
+from .metrics import CHECKS_TOTAL, COMPARES_TOTAL
+from .models import COMPARE_KINDS, PRICE_KINDS, TEXT_KINDS, ErrandSpec
+from .search import make_search
 
 log = logging.getLogger("vigil.worker")
 
@@ -90,12 +92,131 @@ def _currency_of(match_text: str) -> str | None:
 
 
 class CheckRunner:
-    def __init__(self, store, r, fetcher, llm: LLMClient | None, settings: Settings):
+    def __init__(self, store, r, fetcher, llm: LLMClient | None, settings: Settings, search=None):
         self.store = store
         self.r = r
         self.fetcher = fetcher
         self.llm = llm
         self.settings = settings
+        self._search = search
+
+    @property
+    def search(self):
+        if self._search is None:
+            self._search = make_search(self.settings)
+        return self._search
+
+    # ------------------------------------------------------------ price comparison
+
+    def comparer(self) -> Comparer:
+        return Comparer(self.fetcher, self.search, self.llm, self.settings)
+
+    def compare(self, compare_id: str, query: str, max_pages: int | None = None) -> CompareOutcome:
+        """Run the comparison pipeline and keep its compare_runs row up to date."""
+
+        def progress(status: str, rows: list[dict], notes: dict) -> None:
+            self.store.update_compare(compare_id, status=status, offers=rows, notes=notes)
+
+        try:
+            outcome = self.comparer().run(query, max_pages=max_pages, progress=progress)
+        except Exception as exc:
+            log.exception("comparison crashed")
+            self.store.update_compare(
+                compare_id,
+                status="error",
+                notes={"messages": [f"internal error ({type(exc).__name__})"]},
+                finished_at=_now(),
+            )
+            COMPARES_TOTAL.labels(result="error").inc()
+            raise
+        self.store.update_compare(
+            compare_id,
+            status="done",
+            product=outcome.product,
+            offers=outcome.offers,
+            best=outcome.best,
+            notes=outcome.notes,
+            finished_at=_now(),
+        )
+        COMPARES_TOTAL.labels(result="found" if outcome.best else "none").inc()
+        return outcome
+
+    def run_compare(self, compare_id: str, max_pages: int | None = None) -> str | None:
+        row = self.store.get_compare(compare_id)
+        if row is None:
+            log.info("comparison %s no longer exists; skipping", compare_id)
+            return None
+        try:
+            self.compare(compare_id, row["query"], max_pages)
+        except Exception:
+            return "error"
+        return "done"
+
+    def _run_best_price(self, errand: dict, spec: ErrandSpec, started: float) -> str:
+        eid = errand["id"]
+        query = spec.query or spec.url or ""
+        run = self.store.create_compare(query, errand_id=eid)
+        try:
+            outcome = self.compare(run["id"], query)
+        except Exception as exc:
+            return self._record_failure(errand, spec, f"internal error ({type(exc).__name__})", started)
+        finally:
+            try:
+                self.store.prune_compares(eid, keep=50)
+            except Exception:
+                log.warning("could not prune old comparisons")
+        duration = int((time.monotonic() - started) * 1000)
+        best = outcome.best
+        n = outcome.notes
+        tally = f"{n.get('offers', 0)} offers, {n.get('failed', 0)} failed, {n.get('rejected', 0)} rejected"
+        if best is None:
+            return self._record_failure(errand, spec, f"no seller returned a matching price ({tally})", started)
+
+        value = float(best["price"])
+        prev = errand.get("last_value")
+        threshold = spec.threshold
+        if threshold:
+            cond = value < threshold
+            fire = cond and not bool(errand.get("condition_met"))
+        else:  # no target: every drop below the previous best is news
+            cond = prev is not None and value < float(prev) - 0.005
+            fire = cond
+        if fire:
+            status = "triggered"
+        elif errand.get("last_hash") is None:
+            status = "baseline"
+        elif prev is not None and abs(float(prev) - value) >= 0.005:
+            status = "changed"
+        else:
+            status = "unchanged"
+        cur = best.get("currency") or "₹"
+        lines = [
+            f"{o['seller_name']}: {format_money(o['price'], o.get('currency') or cur)}"
+            + (" (out of stock)" if o.get("in_stock") is False else "")
+            for o in outcome.offers
+            if not o.get("error")
+        ]
+        text = "\n".join(lines)
+        messages = [f"best {best_summary(best)}; {tally}"]
+        if fire:
+            title = clean_reference(spec.query or outcome.product.get("title") or errand["name"], 8)
+            target = f"target < {format_money(threshold, cur)}" if threshold else f"was {format_money(prev, cur)}"
+            note = f"Best price: {title} at {best['seller_name']} {format_money(value, cur)} ({target})"
+            queue.push_notify(self.r, eid, note[:300], f"{errand['name']}\n{best.get('url') or ''}")
+            messages.insert(0, note)
+        self.store.update_errand_state(
+            eid,
+            last_checked_at=_now(),
+            last_status=status,
+            last_value=value,
+            last_hash=hash_text(f"{best.get('url')}|{value}|{text}"),
+            last_text=text,
+            condition_met=bool(cond) if threshold else False,
+            consecutive_failures=0,
+        )
+        self.store.add_check(eid, status, duration, value, False, outcome.llm_used, "; ".join(messages)[:1000])
+        CHECKS_TOTAL.labels(status=status).inc()
+        return status
 
     # ------------------------------------------------------------ observation
 
@@ -227,6 +348,12 @@ class CheckRunner:
             # specs are validated on creation; a stricter MIN_INTERVAL later must not break checks
             spec = ErrandSpec.model_construct(**errand["spec"])
         started = time.monotonic()
+        if spec.kind in COMPARE_KINDS:
+            try:
+                return self._run_best_price(errand, spec, started)
+            except Exception as exc:  # never let one bad comparison kill the worker
+                log.exception("best-price check crashed for %s", errand_id)
+                return self._record_failure(errand, spec, f"internal error ({type(exc).__name__})", started)
         try:
             obs, unchanged = self.observe(
                 spec, last_hash=errand.get("last_hash"), learned=errand.get("selector_learned")
@@ -331,12 +458,31 @@ class CheckRunner:
                 self.r,
                 eid,
                 f"Errand failing: {reason}"[:300],
-                f"{errand['name']} failed {failures} checks in a row.\n{spec.url}",
+                f"{errand['name']} failed {failures} checks in a row.\n{spec.url or spec.query or ''}",
             )
         CHECKS_TOTAL.labels(status="error").inc()
         return "error"
 
     # ------------------------------------------------------------ dry run
+
+    def _dry_run_best_price(self, spec: ErrandSpec) -> dict:
+        try:
+            outcome = self.comparer().run(spec.query or spec.url or "")
+        except Exception as exc:
+            log.exception("best-price dry run crashed")
+            return _dry_result(False, f"internal error ({type(exc).__name__})")
+        best = outcome.best
+        n = outcome.notes
+        tally = f"{n.get('offers', 0)} offers, {n.get('failed', 0)} failed, {n.get('rejected', 0)} rejected"
+        found = [o for o in outcome.offers if not o.get("error")]
+        excerpt = "; ".join(f"{o['seller_name']} {format_money(o['price'], o.get('currency'))}" for o in found)
+        if best is None:
+            return _dry_result(False, f"No seller returned a matching price ({tally}).", excerpt=excerpt[:300])
+        cond = bool(spec.threshold) and best["price"] < spec.threshold
+        msg = f"Best price {best_summary(best)} ({tally})."
+        if spec.every_minutes < 60:
+            msg += " Each check visits several sellers; every 60 minutes or more is recommended."
+        return _dry_result(True, msg, best["price"], cond, excerpt[:300])
 
     def dry_run(self, spec_data: dict) -> dict:
         try:
@@ -351,6 +497,8 @@ class CheckRunner:
                 "excerpt": "",
                 "message": f"invalid spec: {exc}"[:500],
             }
+        if spec.kind in COMPARE_KINDS:
+            return self._dry_run_best_price(spec)
         try:
             obs, _ = self.observe(spec, cheap_path=False)
         except (FetchError, CheckFailedError) as exc:
@@ -400,6 +548,18 @@ class CheckRunner:
         }
 
 
+def _dry_result(ok: bool, message: str, value=None, cond=None, excerpt: str = "") -> dict:
+    return {
+        "ok": ok,
+        "value": value,
+        "condition_true": cond,
+        "rendered": False,
+        "selector": None,
+        "excerpt": excerpt,
+        "message": message,
+    }
+
+
 def _excerpt(flat: str, keyword: str | None, size: int = 300) -> str:
     if keyword:
         idx = flat.lower().find(keyword.lower())
@@ -427,6 +587,10 @@ class Worker:
         if kind == "check" and job.get("errand_id"):
             status = self.runner.run_check(str(job["errand_id"]))
             log.info("check %s -> %s", job["errand_id"], status)
+        elif kind == "compare" and job.get("compare_id"):
+            max_pages = job.get("max_pages") if isinstance(job.get("max_pages"), int) else None
+            status = self.runner.run_compare(str(job["compare_id"]), max_pages)
+            log.info("comparison %s -> %s", job["compare_id"], status)
         elif kind == "dryrun" and isinstance(job.get("spec"), dict) and job.get("reply"):
             if queue.job_expired(job):
                 log.info("skipping a dry run nobody is waiting for any more")

@@ -31,6 +31,11 @@ def enqueue_check(r: redis.Redis, errand_id: str) -> bool:
     return True
 
 
+def enqueue_compare(r: redis.Redis, compare_id: str, max_pages: int | None = None) -> None:
+    """Queue a price comparison on the same list as checks (so KEDA scales workers on it)."""
+    r.rpush(CHECKS, json.dumps({"type": "compare", "compare_id": compare_id, "max_pages": max_pages}))
+
+
 def push_dryrun(r: redis.Redis, spec: dict, timeout_s: int = 60) -> str:
     """Queue a dry run at the FRONT of the list (a person is waiting for it).
 
