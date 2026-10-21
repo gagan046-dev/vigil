@@ -29,6 +29,3 @@ ingress:
   hosts:
     app: vigil-dev.localhost         # Phase 3: dev and prod share the cluster, so each gets its own host
     demo: demo.localhost
-
-frontend:
-  replicas: 3                         # GitOps demo: changed in git, Argo CD applies it
