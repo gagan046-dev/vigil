@@ -4,6 +4,7 @@
 The pod is labelled component=helm-test so the api NetworkPolicy lets it in, and it
 follows the "restricted" Pod Security profile like every other Vigil pod.
 */ -}}
+{{- if .Values.tests.enabled }}
 apiVersion: v1
 kind: Pod
 metadata:
@@ -31,3 +32,4 @@ spec:
       resources:
         requests: {cpu: 10m, memory: 16Mi}
         limits: {cpu: 100m, memory: 32Mi}
+{{- end }}

@@ -8,6 +8,8 @@ kind: ConfigMap
 metadata:
   name: vigil-config
   namespace: {{ .Release.Namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"   # Argo CD: config + secret before everything else
   labels:
     {{- include "vigil.labels" (dict "root" . "component" "config") | nindent 4 }}
 data:

@@ -27,5 +27,5 @@ demoShop:
 
 ingress:
   hosts:
-    app: vigil.localhost
+    app: vigil-dev.localhost         # Phase 3: dev and prod share the cluster, so each gets its own host
     demo: demo.localhost

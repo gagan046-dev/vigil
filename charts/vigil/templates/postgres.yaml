@@ -10,6 +10,8 @@ kind: Service
 metadata:
   name: vigil-postgres
   namespace: {{ .Release.Namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"   # Argo CD: data stores before the apps that use them
   labels:
     {{- include "vigil.labels" (dict "root" . "component" "postgres") | nindent 4 }}
 spec:
@@ -26,6 +28,8 @@ kind: StatefulSet
 metadata:
   name: vigil-postgres
   namespace: {{ .Release.Namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"   # Argo CD: data stores before the apps that use them
   labels:
     {{- include "vigil.labels" (dict "root" . "component" "postgres") | nindent 4 }}
 spec:

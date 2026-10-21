@@ -1,0 +1,57 @@
+# argocd-values.yaml - settings for the Argo CD Helm chart (argo-cd 10.9.4, Argo CD v3.5.3).
+#
+# Argo CD is the ONE thing installed by hand (it cannot deploy itself before it exists):
+#   helm repo add argo https://argoproj.github.io/argo-helm
+#   helm upgrade --install argocd argo/argo-cd --version 10.9.4 -n argocd --create-namespace \
+#     -f gitops/bootstrap/argocd-values.yaml
+#   kubectl apply -f gitops/bootstrap/root-app.yaml
+# Everything else (KEDA, sealed-secrets, vigil-dev, vigil-prod) is then deployed BY Argo CD
+# from git.
+#
+# This is a LOCAL learning setup: plain HTTP UI at http://argocd.localhost:8081.
+
+global:
+  domain: argocd.localhost
+
+configs:
+  params:
+    # Serve the UI/API over plain HTTP; Traefik in front of it does not terminate TLS here.
+    server.insecure: true
+  cm:
+    # Show the namespaces Argo created in the UI resource tree; poll git every 60 s
+    # (default 180 s) so pushes show up quickly during demos.
+    timeout.reconciliation: 60s
+
+# Dex = single sign-on connector. Not needed: we log in as the built-in "admin" user.
+dex:
+  enabled: false
+
+# Not used in this project (no ApplicationSets, no Slack/email notifications).
+applicationSet:
+  replicas: 0
+notifications:
+  enabled: false
+
+server:
+  ingress:
+    enabled: true
+    ingressClassName: traefik          # k3s' built-in ingress controller
+    # hostname defaults to global.domain -> http://argocd.localhost:8081
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 512Mi}
+
+controller:
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: "1", memory: 1Gi}
+
+repoServer:
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {cpu: "1", memory: 512Mi}
+
+redis:
+  resources:
+    requests: {cpu: 20m, memory: 32Mi}
+    limits: {cpu: 200m, memory: 128Mi}

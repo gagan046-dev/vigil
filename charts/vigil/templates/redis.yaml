@@ -9,6 +9,8 @@ kind: Service
 metadata:
   name: vigil-redis
   namespace: {{ .Release.Namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"   # Argo CD: data stores before the apps that use them
   labels:
     {{- include "vigil.labels" (dict "root" . "component" "redis") | nindent 4 }}
 spec:
@@ -22,6 +24,8 @@ kind: StatefulSet
 metadata:
   name: vigil-redis
   namespace: {{ .Release.Namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"   # Argo CD: data stores before the apps that use them
   labels:
     {{- include "vigil.labels" (dict "root" . "component" "redis") | nindent 4 }}
 spec:

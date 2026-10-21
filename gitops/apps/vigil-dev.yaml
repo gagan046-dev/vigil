@@ -1,0 +1,49 @@
+# vigil-dev.yaml - the DEV environment: charts/vigil + values-dev.yaml -> namespace vigil-dev.
+#   UI:        http://vigil-dev.localhost:8081
+#   demo shop: http://demo.localhost:8081
+# Fully automatic: every push to main is applied, objects removed from git are deleted
+# (prune) and manual changes in the cluster are reverted (selfHeal).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: vigil-dev
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/gagan046-dev/vigil.git
+    targetRevision: main
+    path: charts/vigil
+    helm:
+      releaseName: vigil
+      valueFiles:
+        - values-dev.yaml
+      valuesObject:
+        tests:
+          enabled: false               # the "helm test" pod: Argo CD has no test step
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: vigil-dev
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+    # Labels Argo CD puts on the namespace it creates: Pod Security "restricted".
+    managedNamespaceMetadata:
+      labels:
+        app.kubernetes.io/part-of: vigil
+        pod-security.kubernetes.io/enforce: restricted
+        pod-security.kubernetes.io/enforce-version: latest
+        pod-security.kubernetes.io/warn: restricted
+        pod-security.kubernetes.io/warn-version: latest
+        pod-security.kubernetes.io/audit: restricted
+        pod-security.kubernetes.io/audit-version: latest
+    retry:
+      limit: 5
+      backoff: {duration: 10s, factor: 2, maxDuration: 3m}

@@ -1,0 +1,52 @@
+# keda.yaml - KEDA (Kubernetes Event-Driven Autoscaling), which scales vigil-worker on
+# the length of the Redis list "vigil:checks".
+#
+# KEDA was first installed by hand in Phase 1 ("helm install keda ... -n keda").
+# This Application ADOPTS that install: same chart, same version, same release name,
+# same namespace and same values, so Argo CD renders identical objects and simply starts
+# tracking them. After adoption the old Helm release record is deleted so that
+# "helm upgrade" and Argo CD never fight over KEDA:
+#   kubectl delete secret -n keda -l owner=helm,name=keda
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: keda
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-3"   # platform add-ons before the Vigil apps
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://kedacore.github.io/charts
+    chart: keda
+    targetRevision: 2.21.0
+    helm:
+      releaseName: keda
+      valuesObject:
+        image:
+          pullPolicy: IfNotPresent
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: keda
+  # KEDA rotates its own TLS certificates and writes the CA into these objects at runtime.
+  # Without this, Argo CD would see a permanent difference and keep "fixing" it.
+  ignoreDifferences:
+    - group: apiregistration.k8s.io
+      kind: APIService
+      jqPathExpressions: [.spec.caBundle]
+    - group: admissionregistration.k8s.io
+      kind: ValidatingWebhookConfiguration
+      jqPathExpressions: [".webhooks[]?.clientConfig.caBundle"]
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true            # KEDA's CRDs are too big for client-side apply
+      - RespectIgnoreDifferences=true
+    retry:
+      limit: 5
+      backoff: {duration: 10s, factor: 2, maxDuration: 3m}

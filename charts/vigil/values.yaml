@@ -231,6 +231,8 @@ networkPolicies:
 
 # ---------------------------------------------------------------- helm test
 tests:
+  # false = do not render the "helm test" pod (Argo CD sets this: it has no "helm test").
+  enabled: true
   image:
     registry: ""
     repository: curlimages/curl

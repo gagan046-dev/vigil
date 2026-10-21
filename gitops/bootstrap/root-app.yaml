@@ -1,0 +1,34 @@
+# root-app.yaml - the "app of apps".
+#
+# This is the only Application applied by hand:
+#   kubectl apply -f gitops/bootstrap/root-app.yaml
+# It points Argo CD at the folder gitops/apps in GitHub. Every file in that folder is
+# itself an Argo CD Application (KEDA, sealed-secrets, vigil-dev, vigil-prod), so adding
+# a file there and pushing is all it takes to deploy something new.
+#
+#   root (this file)
+#    +-- keda            wave -3  (KEDA operator, namespace keda)
+#    +-- sealed-secrets  wave -3  (controller that decrypts SealedSecrets, kube-system)
+#    +-- vigil-dev       wave  0  (charts/vigil + values-dev.yaml  -> namespace vigil-dev)
+#    +-- vigil-prod      wave  0  (charts/vigil + values-prod.yaml + SealedSecret -> vigil-prod)
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root
+  namespace: argocd
+  # Deleting the root app also deletes the child Application objects (cascade).
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/gagan046-dev/vigil.git
+    targetRevision: main
+    path: gitops/apps
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd                  # the child Application objects live in argocd
+  syncPolicy:
+    automated:
+      prune: true                      # a file removed from gitops/apps -> its app is removed
+      selfHeal: true                   # someone edits an Application by hand -> reverted
