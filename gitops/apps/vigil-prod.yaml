@@ -1,0 +1,57 @@
+# vigil-prod.yaml - the PROD environment -> namespace vigil-prod (http://vigil-prod.localhost:8081).
+#
+# Two sources are combined into one Application:
+#   1. charts/vigil with values-prod.yaml (no demo shop, LLM gateway, secrets.create: false)
+#   2. gitops/envs/prod - the ENCRYPTED SealedSecret that becomes Secret "vigil-secrets"
+#
+# Sync is automatic and selfHeal is on, but prune is OFF on purpose: if something
+# disappears from git by mistake, Argo CD only shows it as "requires pruning" and a
+# human decides (a prod database is never deleted by a typo).
+# Promotion: a new image tag reaches prod only through a pull request that changes
+# values-prod.yaml (see .github/workflows/promote.yaml).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: vigil-prod
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  sources:
+    - repoURL: https://github.com/gagan046-dev/vigil.git
+      targetRevision: main
+      path: charts/vigil
+      helm:
+        releaseName: vigil
+        valueFiles:
+          - values-prod.yaml
+        valuesObject:
+          tests:
+            enabled: false
+    - repoURL: https://github.com/gagan046-dev/vigil.git
+      targetRevision: main
+      path: gitops/envs/prod
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: vigil-prod
+  syncPolicy:
+    automated:
+      prune: false                     # deletions in prod need a human (manual sync with prune)
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+    managedNamespaceMetadata:
+      labels:
+        app.kubernetes.io/part-of: vigil
+        pod-security.kubernetes.io/enforce: restricted
+        pod-security.kubernetes.io/enforce-version: latest
+        pod-security.kubernetes.io/warn: restricted
+        pod-security.kubernetes.io/warn-version: latest
+        pod-security.kubernetes.io/audit: restricted
+        pod-security.kubernetes.io/audit-version: latest
+    retry:
+      limit: 5
+      backoff: {duration: 10s, factor: 2, maxDuration: 3m}
