@@ -3,106 +3,99 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="dark">
-  <meta name="description" content="Vigil keeps watch on web pages and tells you only when your condition is met.">
-  <title>Vigil — officer of the watch</title>
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="Vigil watches web pages and prices for you and tells you only when something you care about changes.">
+  <title>Vigil</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css">
-  <script src="app.js" defer></script>
+  <link rel="stylesheet" href="css/tokens.css">
+  <link rel="stylesheet" href="css/base.css">
+  <link rel="stylesheet" href="css/components.css">
+  <link rel="stylesheet" href="css/pages.css">
+  <!-- Applies the saved theme / sidebar state before first paint (CSP forbids inline scripts). -->
+  <script src="js/boot.js"></script>
+  <script type="module" src="js/main.js"></script>
 </head>
 <body>
-  <a class="skip" href="#watches">Skip to watches</a>
+  <svg xmlns="http://www.w3.org/2000/svg" class="sprite" aria-hidden="true" focusable="false">
+    <defs>
+      <symbol id="i-watches" viewBox="0 0 24 24"><path d="M2.5 12s3.5-6.5 9.5-6.5S21.5 12 21.5 12s-3.5 6.5-9.5 6.5S2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.75"/></symbol>
+      <symbol id="i-compare" viewBox="0 0 24 24"><path d="M3.5 12.6V4.5a1 1 0 0 1 1-1h8.1a1 1 0 0 1 .7.3l7.2 7.2a1 1 0 0 1 0 1.4l-8.1 8.1a1 1 0 0 1-1.4 0l-7.2-7.2a1 1 0 0 1-.3-.7z"/><circle cx="8.5" cy="8.5" r="1.5"/></symbol>
+      <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 0 0 4 0"/></symbol>
+      <symbol id="i-activity" viewBox="0 0 24 24"><path d="M3 12h4l2.5-6 5 12 2.5-6h4"/></symbol>
+      <symbol id="i-system" viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></symbol>
+      <symbol id="i-chev-left" viewBox="0 0 24 24"><path d="m14.5 6-6 6 6 6"/></symbol>
+      <symbol id="i-chev-right" viewBox="0 0 24 24"><path d="m9.5 6 6 6-6 6"/></symbol>
+      <symbol id="i-chev-down" viewBox="0 0 24 24"><path d="m6 9.5 6 6 6-6"/></symbol>
+      <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5.5" cy="12" r="1.1" fill="currentColor"/><circle cx="12" cy="12" r="1.1" fill="currentColor"/><circle cx="18.5" cy="12" r="1.1" fill="currentColor"/></symbol>
+      <symbol id="i-x" viewBox="0 0 24 24"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
+      <symbol id="i-check-all" viewBox="0 0 24 24"><path d="m2.5 12.5 4.5 4.5 9-9.5M11.5 16.5l.5.5 9.5-9.5"/></symbol>
+      <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4.5h5.5V10M19.5 4.5 11 13M18 14v4.5a1 1 0 0 1-1 1H5.5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1H10"/></symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5v4h-4"/></symbol>
+      <symbol id="i-pause" viewBox="0 0 24 24"><path d="M9 6v12M15 6v12"/></symbol>
+      <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l10-6.5z"/></symbol>
+      <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4.5 7h15M10 7V4.5h4V7M6.5 7l.8 12a1 1 0 0 0 1 .9h7.4a1 1 0 0 0 1-.9l.8-12"/></symbol>
+      <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.75"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6 7 7M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4"/></symbol>
+      <symbol id="i-moon" viewBox="0 0 24 24"><path d="M19.5 14.5A7.5 7.5 0 0 1 9.5 4.5a7.5 7.5 0 1 0 10 10z"/></symbol>
+      <symbol id="i-panel" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="1.5"/><path d="M9 4.5v15"/></symbol>
+      <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4.5 3.2 19.5h17.6z"/><path d="M12 10v4M12 16.8v.2"/></symbol>
+      <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 7.8v.2"/></symbol>
+      <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></symbol>
+      <symbol id="i-down" viewBox="0 0 24 24"><path d="M12 5v14M6.5 13.5 12 19l5.5-5.5"/></symbol>
+      <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 19V5M6.5 10.5 12 5l5.5 5.5"/></symbol>
+      <symbol id="i-flask" viewBox="0 0 24 24"><path d="M9.5 3.5h5M10 3.5v6L4.8 18.3a1.5 1.5 0 0 0 1.3 2.2h11.8a1.5 1.5 0 0 0 1.3-2.2L14 9.5v-6M7.5 14.5h9"/></symbol>
+      <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r=".8"/></symbol>
+    </defs>
+  </svg>
 
-  <header class="masthead">
-    <div class="masthead__title">
-      <h1><span class="wordmark">Vigil</span> <span class="dash">—</span> <span class="subtitle">officer of the watch</span></h1>
-      <p class="clock" aria-live="off"><span id="clock-time" class="mono">----</span> <span id="clock-watch" class="clock__watch"></span></p>
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <div class="shell">
+    <nav class="sidebar" aria-label="Main">
+      <div class="sidebar__inner">
+      <div class="sidebar__brand">
+        <a href="#/watches" class="brand" aria-label="Vigil home">
+          <img src="favicon.svg" alt="" width="22" height="22">
+          <span class="brand__name">Vigil</span>
+        </a>
+        <button type="button" class="icon-btn sidebar__collapse" id="sidebar-toggle" aria-label="Collapse sidebar" aria-pressed="false">
+          <svg class="icon" aria-hidden="true"><use href="#i-panel"/></svg>
+        </button>
+      </div>
+      <ul class="nav" role="list">
+        <li><a class="nav__item" href="#/watches" data-nav="watches"><svg class="icon" aria-hidden="true"><use href="#i-watches"/></svg><span class="nav__label">Watches</span></a></li>
+        <li><a class="nav__item" href="#/compare" data-nav="compare"><svg class="icon" aria-hidden="true"><use href="#i-compare"/></svg><span class="nav__label">Compare</span></a></li>
+        <li><a class="nav__item" href="#/inbox" data-nav="inbox"><span class="nav__icon-wrap"><svg class="icon" aria-hidden="true"><use href="#i-inbox"/></svg><span class="badge" id="unread-badge" hidden></span></span><span class="nav__label">Inbox</span></a></li>
+        <li><a class="nav__item" href="#/activity" data-nav="activity"><svg class="icon" aria-hidden="true"><use href="#i-activity"/></svg><span class="nav__label">Activity</span></a></li>
+        <li><a class="nav__item" href="#/system" data-nav="system"><svg class="icon" aria-hidden="true"><use href="#i-system"/></svg><span class="nav__label">System</span></a></li>
+      </ul>
+      <div class="sidebar__foot">
+        <div class="conn" id="conn" title="API connection"><span class="conn__dot"></span><span class="nav__label conn__label">Connecting</span></div>
+        <button type="button" class="nav__item theme-toggle" id="theme-toggle" aria-label="Switch to dark theme">
+          <svg class="icon" aria-hidden="true"><use href="#i-moon"/></svg><span class="nav__label">Dark theme</span>
+        </button>
+      </div>
+      </div>
+    </nav>
+
+    <div class="workspace">
+      <header class="topbar">
+        <div class="topbar__titles">
+          <nav class="crumbs" id="crumbs" aria-label="Breadcrumb" hidden></nav>
+          <h1 class="topbar__title" id="page-title" tabindex="-1">Watches</h1>
+        </div>
+        <div class="topbar__actions">
+          <button type="button" class="btn btn--primary" id="btn-new-watch">
+            <svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg><span class="btn__label">New watch</span>
+          </button>
+        </div>
+      </header>
+      <main id="main" class="page" tabindex="-1"></main>
     </div>
-    <dl class="strip mono" id="strip" aria-label="System status">
-      <div><dt>env</dt><dd id="sys-env">—</dd></div>
-      <div><dt>llm</dt><dd id="sys-llm">—</dd></div>
-      <div><dt>budget</dt><dd id="sys-budget">—</dd></div>
-      <div><dt>queue</dt><dd id="sys-queue">—</dd></div>
-      <div><dt>sched</dt><dd id="sys-sched">—</dd></div>
-      <div><dt>link</dt><dd id="sys-link" class="link-state">connecting</dd></div>
-    </dl>
-  </header>
+  </div>
 
-  <main class="deck">
-    <!-- I. Post a watch -->
-    <section class="col col--post" aria-labelledby="h-post">
-      <h2 id="h-post" class="col__head"><span class="numeral">I.</span> Post a watch</h2>
-      <form id="plan-form" class="post" autocomplete="off" novalidate>
-        <label for="prompt" class="label">Orders, in plain English</label>
-        <textarea id="prompt" name="prompt" rows="5" maxlength="2000" spellcheck="true"
-          placeholder="Tell me when the laptop at https://shop.example/aurora drops below ₹1,20,000, check every 30 minutes"></textarea>
-        <p class="hint">Name a page, a condition and how often. Quote exact words to watch for.</p>
-        <div class="actions">
-          <button type="submit" id="btn-plan" class="btn">Plan</button>
-        </div>
-      </form>
-
-      <div id="post-msg" class="msgs" role="status" aria-live="polite"></div>
-
-      <form id="spec-form" class="spec" hidden novalidate autocomplete="off">
-        <h3 class="sub">The standing order <span id="plan-source" class="source mono"></span></h3>
-        <table class="spec__table">
-          <tbody>
-            <tr><th scope="row"><label for="f-name">name</label></th>
-              <td><input id="f-name" type="text" maxlength="80" required></td></tr>
-            <tr><th scope="row"><label for="f-kind">kind</label></th>
-              <td><select id="f-kind">
-                <option value="price_below">price below</option>
-                <option value="price_above">price above</option>
-                <option value="text_appears">text appears</option>
-                <option value="text_disappears">text disappears</option>
-                <option value="page_changed">page changed</option>
-              </select></td></tr>
-            <tr><th scope="row"><label for="f-url">url</label></th>
-              <td><input id="f-url" type="url" inputmode="url" required></td></tr>
-            <tr data-for="price"><th scope="row"><label for="f-threshold">threshold</label></th>
-              <td><input id="f-threshold" type="text" inputmode="decimal" placeholder="120000"></td></tr>
-            <tr data-for="text"><th scope="row"><label for="f-keyword">keyword</label></th>
-              <td><input id="f-keyword" type="text" maxlength="120"></td></tr>
-            <tr><th scope="row"><label for="f-selector">selector</label></th>
-              <td><input id="f-selector" type="text" placeholder="optional CSS, e.g. .price-now"></td></tr>
-            <tr><th scope="row"><label for="f-render">render</label></th>
-              <td class="check"><input id="f-render" type="checkbox"> <label for="f-render" class="inline">run the page's JavaScript</label></td></tr>
-            <tr><th scope="row"><label for="f-every">every</label></th>
-              <td><select id="f-every"></select></td></tr>
-          </tbody>
-        </table>
-        <ul id="plan-notes" class="notes" aria-label="Planner notes"></ul>
-        <div class="actions">
-          <button type="button" id="btn-dry" class="btn">Dry run</button>
-          <button type="submit" id="btn-keep" class="btn btn--lamp">Keep watch</button>
-          <button type="button" id="btn-discard" class="btn btn--quiet">Discard</button>
-        </div>
-        <div id="dry-out" class="dry" role="status" aria-live="polite"></div>
-      </form>
-    </section>
-
-    <!-- II. Watches -->
-    <section class="col col--watches" id="watches" aria-labelledby="h-watches" tabindex="-1">
-      <h2 id="h-watches" class="col__head"><span class="numeral">II.</span> Watches <span id="watch-count" class="count mono"></span></h2>
-      <div id="watch-msg" class="msgs" role="status" aria-live="polite"></div>
-      <ul id="watch-list" class="watches"></ul>
-    </section>
-
-    <!-- III. Log -->
-    <section class="col col--log" aria-labelledby="h-log">
-      <h2 id="h-log" class="col__head"><span class="numeral">III.</span> Log</h2>
-      <div id="log-msg" class="msgs" role="status" aria-live="polite"></div>
-      <ol id="log-list" class="log mono" aria-label="Recent checks, newest first"></ol>
-
-      <h3 class="col__head col__head--minor" id="h-inbox">Inbox <span id="inbox-count" class="count mono"></span></h3>
-      <div id="inbox-msg" class="msgs" role="status" aria-live="polite"></div>
-      <ul id="inbox-list" class="inbox" aria-labelledby="h-inbox"></ul>
-    </section>
-  </main>
-
-  <footer class="foot mono">
-    <span>Polls every 5 s.</span> <span>Times are local, 24-hour.</span> <span id="sys-version"></span>
-  </footer>
+  <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
 </body>
 </html>

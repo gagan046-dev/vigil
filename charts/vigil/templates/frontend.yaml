@@ -1,5 +1,5 @@
 {{- /*
-vigil-frontend: the "night-watch logbook" web UI. nginx (unprivileged, port 8080)
+vigil-frontend: the Vigil web UI. nginx (unprivileged, port 8080)
 serves the static files and forwards /api/* to the vigil-api Service.
 nginx looks up "vigil-api" once at start-up; if the api Service is missing then, nginx
 exits and Kubernetes simply restarts it until the Service exists.
