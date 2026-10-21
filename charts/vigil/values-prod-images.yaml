@@ -1,0 +1,8 @@
+# values-prod-images.yaml - which IMAGES the prod environment runs.
+#
+# Changed ONLY by a reviewed pull request: the "promote" workflow
+# (.github/workflows/promote.yaml, started by hand) copies the image tag that is running
+# in dev into this file and opens a PR. Merging the PR = deploying to prod.
+#
+# Empty ({}) = use the defaults from values.yaml (the locally imported :dev images).
+{}

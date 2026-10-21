@@ -1,0 +1,10 @@
+# values-dev-images.yaml - which IMAGES the dev environment runs.
+#
+# Written by CI: after every push to main, .github/workflows/ci.yaml (job "bump-dev")
+# builds vigil-core, vigil-worker and vigil-frontend, pushes them to ghcr.io tagged
+# sha-<short commit>, and rewrites this file to point at them. Argo CD sees the commit
+# and rolls the new images out to namespace vigil-dev.
+#
+# Empty ({}) = use the defaults from values.yaml: the locally built :dev images that
+# scripts/import-images.ps1 copied into the k3d nodes.
+{}

@@ -8,7 +8,7 @@
 # disappears from git by mistake, Argo CD only shows it as "requires pruning" and a
 # human decides (a prod database is never deleted by a typo).
 # Promotion: a new image tag reaches prod only through a pull request that changes
-# values-prod.yaml (see .github/workflows/promote.yaml).
+# charts/vigil/values-prod-images.yaml (see .github/workflows/promote.yaml).
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -28,6 +28,7 @@ spec:
         releaseName: vigil
         valueFiles:
           - values-prod.yaml
+          - values-prod-images.yaml  # image tags, changed only by a promotion PR
         valuesObject:
           tests:
             enabled: false

@@ -22,6 +22,7 @@ spec:
       releaseName: vigil
       valueFiles:
         - values-dev.yaml
+        - values-dev-images.yaml     # image tags, rewritten by CI (bump-dev job)
       valuesObject:
         tests:
           enabled: false               # the "helm test" pod: Argo CD has no test step
