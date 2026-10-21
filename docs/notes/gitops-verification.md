@@ -263,6 +263,17 @@ gh pr list -> #1 "Promote sha-e4cf0da to prod"  promote/prod-sha-e4cf0da  OPEN
   diff: charts/vigil/values-prod-images.yaml {} -> ghcr.io/gagan046-dev/*:sha-e4cf0da
 ```
 The PR is left open on purpose: merging it is the human approval that deploys to prod
-(Argo CD then syncs vigil-prod from main). Note: a PR opened with GITHUB_TOKEN does not
-start the CI checks by itself (GitHub's loop protection); close and reopen it, or push an
-empty commit to the branch, to run them before merging.
+(Argo CD then syncs vigil-prod from main). The CI run for this bot-opened PR shows
+`action_required`: GitHub waits for a human to click "Approve and run workflows" on the PR
+before running CI for a PR created by GITHUB_TOKEN.
+
+### Second push, fully automatic (after the DNS fix)
+
+```
+push 5f612bf -> CI run 39571768562: all 6 jobs green (worker build 23 s thanks to the GHA cache)
+bump-dev -> ed991bf "chore(dev): deploy images sha-5f612bf [skip ci]"
+Argo CD -> every vigil-dev Deployment on ghcr.io/gagan046-dev/*:sha-5f612bf, Synced/Healthy,
+           no manual step
+gh run list -> no run for 1ddfd37 or ed991bf (no CI loop)
+kubectl get applications -n argocd -> keda, root, sealed-secrets, vigil-dev, vigil-prod all Synced/Healthy
+```
