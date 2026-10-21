@@ -166,3 +166,103 @@ commit c9429ed  git revert 814c072
 (Argo CD polls git every 60 s - `timeout.reconciliation: 60s` in argocd-values.yaml -
 so a push shows up within about a minute. A GitHub webhook would make it instant, but
 this cluster is not reachable from the internet.)
+
+## Step C - Phase 4: CI -> GitOps
+
+### Action pins (looked up with gh api, releases at least 2 weeks old on 2026-10-21)
+
+```
+gh api repos/<owner>/<action>/git/ref/tags/<tag>   (annotated tags dereferenced via git/tags/<sha>)
+actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1            # v7.0.1  (2026-07-20)
+actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97        # v7.0.0  (2026-07-20)
+azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310            # v5.0.1  (2026-06-23)
+docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1  (2026-09-16)
+docker/login-action@dbcb813823bdd20940b903addbd779551569679f         # v4.6.0  (2026-07-29)
+docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302      # v6.2.0  (2026-07-02)
+docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc    # v7.4.0  (2026-09-15)
+helm v4.3.0 (2026-09-09; v4.3.1 is too new), kubeconform v0.8.0 (checksum verified)
+```
+
+### Local pre-check with the pinned tool versions (scratch venv, not in the repo)
+
+```
+ruff check .           -> All checks passed!
+ruff format --check .  -> 30 files already formatted
+pytest                 -> 190 passed
+helm template + generated values-dev-images.yaml -> api/notifier/demo-shop/migrate use
+  ghcr.io/gagan046-dev/vigil-core:sha-..., worker vigil-worker, frontend vigil-frontend
+```
+
+### Repository setting for the promote workflow
+
+```bash
+gh api -X PUT repos/gagan046-dev/vigil/actions/permissions/workflow \
+  -f default_workflow_permissions=read -F can_approve_pull_request_reviews=true
+#   {"default_workflow_permissions":"read","can_approve_pull_request_reviews":true}
+```
+(The default token stays read-only; this only lets a workflow that asks for
+`pull-requests: write` open a PR.)
+
+### First CI run (push of e4cf0da) - green on the first attempt
+
+```
+gh run watch 39569238368 --exit-status
+  ✓ helm lint + template        7s
+  ✓ lint + test                26s
+  ✓ build + push vigil-worker  4m0s
+  ✓ build + push vigil-core     50s
+  ✓ build + push vigil-frontend 20s
+  ✓ bump dev image tag           7s
+bump-dev log:
+  vigil-core:sha-e4cf0da anonymous pull -> HTTP 200   (same for worker, frontend)
+  [main 1ddfd37] chore(dev): deploy images sha-e4cf0da [skip ci]
+gh run list  -> no run was started for 1ddfd37 (GITHUB_TOKEN push + [skip ci]: no loop)
+```
+
+### GHCR package visibility
+
+```
+gh api "/users/gagan046-dev/packages?package_type=container" --jq '.[]|[.name,.visibility]|@tsv'
+  vigil-frontend  public
+  vigil-core      public
+  vigil-worker    public
+```
+
+### Argo CD deploys the CI-built images to vigil-dev
+
+First attempt: every new pod went to `ImagePullBackOff` with
+`dial tcp: lookup ghcr.io: Try again`. Cause: inside the k3d nodes, Docker Desktop's DNS
+(192.168.65.254) answers A queries for ghcr.io but TIMES OUT on AAAA queries
+(`nslookup -type=aaaa ghcr.io` -> "connection timed out"), and containerd's resolver gives
+up. 1.1.1.1 answers at once. Fix (now also in scripts/phase3-up.ps1):
+
+```bash
+for n in k3d-vigil-server-0 k3d-vigil-agent-0 k3d-vigil-agent-1; do
+  docker exec $n sh -c 'grep -q "^nameserver 1.1.1.1" /etc/resolv.conf || echo "nameserver 1.1.1.1" >> /etc/resolv.conf'
+done
+docker exec k3d-vigil-agent-0 crictl pull ghcr.io/gagan046-dev/vigil-frontend:sha-e4cf0da   # ok in 4 s
+kubectl delete pod -n vigil-dev <the ImagePullBackOff pods>
+```
+```
+kubectl get deploy -n vigil-dev -o wide
+  vigil-api        2/2  ghcr.io/gagan046-dev/vigil-core:sha-e4cf0da
+  vigil-demo-shop  1/1  ghcr.io/gagan046-dev/vigil-core:sha-e4cf0da
+  vigil-frontend   2/2  ghcr.io/gagan046-dev/vigil-frontend:sha-e4cf0da
+  vigil-notifier   1/1  ghcr.io/gagan046-dev/vigil-core:sha-e4cf0da
+  vigil-worker     1/1  ghcr.io/gagan046-dev/vigil-worker:sha-e4cf0da
+kubectl get application vigil-dev -n argocd -> Synced Healthy
+curl http://vigil-dev.localhost:8081/ -> 200; the existing watch kept running on the new images
+```
+
+### Promotion to prod (pull request)
+
+```
+gh workflow run promote.yaml          # no tag given -> takes the tag dev runs (sha-e4cf0da)
+gh run watch 39571639300 --exit-status   -> success
+gh pr list -> #1 "Promote sha-e4cf0da to prod"  promote/prod-sha-e4cf0da  OPEN
+  diff: charts/vigil/values-prod-images.yaml {} -> ghcr.io/gagan046-dev/*:sha-e4cf0da
+```
+The PR is left open on purpose: merging it is the human approval that deploys to prod
+(Argo CD then syncs vigil-prod from main). Note: a PR opened with GITHUB_TOKEN does not
+start the CI checks by itself (GitHub's loop protection); close and reopen it, or push an
+empty commit to the branch, to run them before merging.
