@@ -47,6 +47,14 @@ config:
   hostMinGapMs: 5000                  # politeness: one request per website every 5 s
   dryrunTimeoutSeconds: 60
   ntfyUrl: ""                         # optional push channel, e.g. https://ntfy.sh/<topic>
+  # Price compare ("Compare" page + "best price below" watches).
+  # searchProvider: demo    = offline, returns the fictional demo-shop sellers (dev)
+  #                 searxng = real web search through the vigil-searxng pod (see searxng below)
+  searchProvider: demo
+  searxngUrl: http://vigil-searxng:8080
+  # Seller allow-list (domains). Search hits on any other site are ignored.
+  compareSellers: flipkart.com,amazon.in,myntra.com,croma.com,reliancedigital.in,vijaysales.com,tatacliq.com,ajio.com
+  compareMaxPages: 8                  # max seller pages fetched per comparison (1..20)
   # Free-form extra env vars for the ConfigMap, e.g. {SOME_FLAG: "1"}.
   extra: {}
 
@@ -62,6 +70,9 @@ secrets:
   create: false
   postgresPassword: ""
   internalToken: ""
+  # Key "searxng-secret" (SearXNG's server.secret_key). Only written when create: true
+  # and searxng.enabled; in prod it comes from the SealedSecret.
+  searxngSecret: ""
 
 # ---------------------------------------------------------------- api
 api:
@@ -210,6 +221,24 @@ llmGateway:
   resources:
     requests: {cpu: 50m, memory: 256Mi}
     limits: {cpu: "1", memory: 1Gi}
+
+# ---------------------------------------------------------------- SearXNG (web search for Compare)
+# A self-hosted metasearch engine. The worker calls its JSON API
+# (GET /search?q=...&format=json) when config.searchProvider is "searxng".
+# Reachable ONLY from the worker (NetworkPolicy); it needs internet egress itself.
+searxng:
+  enabled: false
+  replicas: 1
+  image:
+    registry: ""
+    repository: searxng/searxng
+    tag: 2026.10.4-d48c4b555
+    pullPolicy: IfNotPresent
+  # server.secret_key is read from this key of the Secret (secrets.name) as SEARXNG_SECRET.
+  secretKey: searxng-secret
+  resources:
+    requests: {cpu: 50m, memory: 160Mi}
+    limits: {cpu: "1", memory: 512Mi}
 
 # ---------------------------------------------------------------- ingress
 ingress:

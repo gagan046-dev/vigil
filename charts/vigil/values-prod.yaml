@@ -7,9 +7,11 @@ config:
   llmMode: gateway                    # use the LiteLLM gateway below
   minIntervalMinutes: 5               # be polite to websites: at most every 5 minutes
   allowedInternalHosts: ""            # no internal hosts may be watched
+  searchProvider: searxng             # Compare searches the real web through vigil-searxng
 
 # The Secret "vigil-secrets" must ALREADY exist in the namespace (in Phase 3 it comes
 # from a SealedSecret). Required keys: postgres-password, internal-token.
+# Required with searxng.enabled: searxng-secret.
 # Optional keys: openrouter-api-key, llm-master-key, telegram-bot-token, telegram-chat-id.
 secrets:
   create: false
@@ -24,6 +26,9 @@ demoShop:
 
 llmGateway:
   enabled: true                       # starts even without an OpenRouter key (optional secretKeyRef)
+
+searxng:
+  enabled: true                       # web search for Compare (secret key from the SealedSecret)
 
 ingress:
   hosts:

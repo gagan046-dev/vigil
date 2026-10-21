@@ -9,6 +9,7 @@ config:
   llmMode: fake                       # no model calls; deterministic paths only
   minIntervalMinutes: 1               # allow "every minute" watches for quick demos
   allowedInternalHosts: vigil-demo-shop   # let the SSRF guard through to the demo shop
+  searchProvider: demo                # Compare uses the fictional demo-shop sellers, offline
 
 # DEV ONLY - the chart creates the Secret with these fixed placeholder values.
 # They are NOT secret (they are in a public git repo) and must never be used anywhere
@@ -24,6 +25,12 @@ worker:
 
 demoShop:
   enabled: true
+
+# SearXNG is OFF in dev: the demo search provider needs no web search, and it saves
+# ~200 MB of RAM. To try real search in dev: searxng.enabled: true,
+# config.searchProvider: searxng, and set secrets.searxngSecret.
+searxng:
+  enabled: false
 
 ingress:
   hosts:

@@ -7,6 +7,7 @@ then open only the paths Vigil needs:
   api/worker/notifier -> postgres:5432, redis:6379;  KEDA -> redis:6379
   worker -> demo-shop:8000;  Traefik -> demo-shop:8000
   api/worker -> llm-gateway:4000
+  worker -> searxng:8080
 
 The worker also gets an EGRESS policy: it fetches arbitrary URLs, so it may reach the
 public internet but NOT private/internal ranges (backs up the SSRF guard in the code,
@@ -153,6 +154,28 @@ spec:
       ports:
         - {protocol: TCP, port: 4000}
 {{- end }}
+{{- if .Values.searxng.enabled }}
+---
+# 7b) searxng: ONLY from the worker (it runs the comparisons). SearXNG itself has no
+# egress policy: it must reach the public search engines.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-searxng
+  namespace: {{ $ns }}
+  labels:
+    {{- include "vigil.labels" (dict "root" . "component" "network-policy") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/component: searxng}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/component: worker}
+      ports:
+        - {protocol: TCP, port: 8080}
+{{- end }}
 {{- if .Values.worker.egressPolicy.enabled }}
 ---
 # 8) worker EGRESS: DNS, the Vigil services it needs, and the PUBLIC internet only.
@@ -195,6 +218,12 @@ spec:
         - podSelector:
             matchLabels: {app.kubernetes.io/component: llm-gateway}
       ports: [{protocol: TCP, port: 4000}]
+    {{- end }}
+    {{- if .Values.searxng.enabled }}
+    - to:                                       # web search for Compare
+        - podSelector:
+            matchLabels: {app.kubernetes.io/component: searxng}
+      ports: [{protocol: TCP, port: 8080}]
     {{- end }}
     # Websites: any address EXCEPT private, loopback, link-local (cloud metadata
     # 169.254.169.254) and carrier-grade NAT ranges.

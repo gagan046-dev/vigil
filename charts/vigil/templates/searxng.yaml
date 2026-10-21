@@ -1,0 +1,112 @@
+{{- /*
+vigil-searxng (searxng.enabled, production): a self-hosted metasearch engine used by
+the price-compare pipeline. The worker calls GET /search?q=...&format=json
+(SEARXNG_URL = http://vigil-searxng:8080) and keeps only hits on the seller allow-list.
+
+settings.yml comes from the ConfigMap below: JSON output enabled, rate limiter and
+image proxy off (only the worker can reach this pod, see networkpolicies.yaml).
+server.secret_key is NOT in the ConfigMap: SearXNG reads it from the env var
+SEARXNG_SECRET, which comes from the Secret key "searxng-secret".
+Runs as the image's own unprivileged user (977) with a read-only root filesystem
+(tested with 2026.10.4-d48c4b555: --read-only --user 977 --cap-drop ALL).
+*/ -}}
+{{- define "vigil.searxngSettings" -}}
+# SearXNG settings: start from the upstream defaults, change only what Vigil needs.
+use_default_settings: true
+server:
+  limiter: false              # one internal client (the worker), no bot detection needed
+  image_proxy: false
+  public_instance: false
+search:
+  safe_search: 0
+  formats: [html, json]       # json = the API the worker calls
+{{- end -}}
+{{- if .Values.searxng.enabled }}
+{{- $sel := include "vigil.selectorLabels" (dict "root" . "component" "searxng") }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vigil-searxng
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vigil.labels" (dict "root" . "component" "searxng") | nindent 4 }}
+data:
+  settings.yml: |
+    {{- include "vigil.searxngSettings" . | nindent 4 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vigil-searxng                           # SEARXNG_URL = http://vigil-searxng:8080
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vigil.labels" (dict "root" . "component" "searxng") | nindent 4 }}
+spec:
+  selector:
+    {{- $sel | nindent 4 }}
+  ports:
+    - {name: http, port: 8080, targetPort: http}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vigil-searxng
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vigil.labels" (dict "root" . "component" "searxng") | nindent 4 }}
+spec:
+  replicas: {{ .Values.searxng.replicas }}
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      {{- $sel | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "vigil.labels" (dict "root" . "component" "searxng") | nindent 8 }}
+      annotations:
+        # restart SearXNG when settings.yml changes
+        checksum/searxng-settings: {{ include "vigil.searxngSettings" . | sha256sum }}
+    spec:
+      automountServiceAccountToken: false
+      {{- include "vigil.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        {{- include "vigil.podSecurity" (dict "uid" 977) | nindent 8 }}
+      containers:
+        - name: searxng
+          image: {{ include "vigil.image" (dict "root" . "image" .Values.searxng.image) }}
+          imagePullPolicy: {{ .Values.searxng.image.pullPolicy }}
+          ports:
+            - {name: http, containerPort: 8080}
+          env:
+            - name: SEARXNG_SECRET
+              valueFrom:
+                secretKeyRef: {name: {{ .Values.secrets.name }}, key: {{ .Values.searxng.secretKey }}}
+            - {name: GRANIAN_WORKERS, value: "1"}
+          securityContext:
+            {{- include "vigil.containerSecurity" dict | nindent 12 }}
+          resources:
+            {{- toYaml .Values.searxng.resources | nindent 12 }}
+          startupProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 5
+            failureThreshold: 24                # up to 2 minutes (engines load on start)
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 20
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 10
+          volumeMounts:
+            - {name: config, mountPath: /etc/searxng, readOnly: true}
+            - {name: cache, mountPath: /var/cache/searxng}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: config
+          configMap:
+            name: vigil-searxng
+        - name: cache
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+{{- end }}

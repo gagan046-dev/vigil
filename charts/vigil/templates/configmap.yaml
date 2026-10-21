@@ -36,6 +36,14 @@ data:
   ALLOWED_INTERNAL_HOSTS: {{ .Values.config.allowedInternalHosts | quote }}
   HOST_MIN_GAP_MS: {{ .Values.config.hostMinGapMs | quote }}
   DRYRUN_TIMEOUT_SECONDS: {{ .Values.config.dryrunTimeoutSeconds | quote }}
+  # Price compare
+  SEARCH_PROVIDER: {{ .Values.config.searchProvider | quote }}
+  SEARXNG_URL: {{ .Values.config.searxngUrl | quote }}
+  COMPARE_SELLERS: {{ required "config.compareSellers must not be empty" .Values.config.compareSellers | quote }}
+  COMPARE_MAX_PAGES: {{ .Values.config.compareMaxPages | quote }}
+  {{- if .Values.demoShop.enabled }}
+  DEMO_SHOP_URL: "http://vigil-demo-shop:8000"
+  {{- end }}
   # Notifications
   NTFY_URL: {{ .Values.config.ntfyUrl | quote }}
   {{- range $k, $v := .Values.config.extra }}
