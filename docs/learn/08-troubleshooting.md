@@ -96,7 +96,10 @@ flowchart TD
     F --> V["crictl pull works in 4 s; delete the stuck pods"]
 ```
 
-The fix (also in `scripts/phase3-up.ps1`; re-run it after the k3d nodes are *recreated*):
+The quick fix by hand is below. **Permanent fix:** `scripts\install-node-dns-fix.ps1` copies
+`cluster/k3d-entrypoint-zz-dns-fallback.sh` into each node, and k3d runs it at every node
+start. That's needed because Docker rewrites `/etc/resolv.conf` whenever a container starts,
+so a hand edit is lost after a restart. `scripts/phase3-up.ps1` runs it for you.
 
 ```bash
 for n in k3d-vigil-server-0 k3d-vigil-agent-0 k3d-vigil-agent-1; do

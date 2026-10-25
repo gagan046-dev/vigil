@@ -57,13 +57,14 @@ k3d cluster start vigil
 k3d cluster delete vigil
 ```
 
-After the nodes are **recreated** (not after a plain stop/start), re-apply the node DNS
-fix so the nodes can pull from `ghcr.io` (Docker Desktop's DNS times out on AAAA queries):
+After the nodes are **recreated** (`k3d cluster delete` + `create`), install the node DNS fix
+once, so the nodes can pull from `ghcr.io` (Docker Desktop's DNS times out on AAAA queries).
+It puts a start-up script in every node that re-adds `nameserver 1.1.1.1` at each boot.
+Docker rewrites `/etc/resolv.conf` on every container start, so a one-off edit would be lost
+after `k3d cluster stop/start`:
 
-```bash
-for n in k3d-vigil-server-0 k3d-vigil-agent-0 k3d-vigil-agent-1; do
-  docker exec $n sh -c 'grep -q "^nameserver 1.1.1.1" /etc/resolv.conf || echo "nameserver 1.1.1.1" >> /etc/resolv.conf'
-done
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\install-node-dns-fix.ps1
 ```
 
 (`scripts\phase3-up.ps1` does this for you.)
