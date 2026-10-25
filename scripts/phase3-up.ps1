@@ -18,12 +18,10 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 
 # Docker Desktop's DNS (192.168.65.254) times out on AAAA queries for ghcr.io, so
-# containerd in the k3d nodes fails with "lookup ghcr.io: Try again". Adding a second
-# nameserver lets those queries fall through. Not persistent: re-run after the k3d
-# nodes are recreated (a plain restart keeps it).
-foreach ($n in (docker ps --filter "label=k3d.cluster=vigil" --format "{{.Names}}" | Where-Object { $_ -notmatch "serverlb|tools" })) {
-    docker exec $n sh -c 'grep -q "^nameserver 1.1.1.1" /etc/resolv.conf || echo "nameserver 1.1.1.1" >> /etc/resolv.conf'
-}
+# containerd in the k3d nodes fails with "lookup ghcr.io: Try again". This installs a
+# k3d start-up script in every node that adds a second nameserver at each boot
+# (Docker rewrites /etc/resolv.conf on every container start, so a one-off edit is lost).
+& (Join-Path $PSScriptRoot "install-node-dns-fix.ps1")
 
 helm repo add argo https://argoproj.github.io/argo-helm --force-update | Out-Null
 helm upgrade --install argocd argo/argo-cd --version 10.9.4 -n argocd --create-namespace `
